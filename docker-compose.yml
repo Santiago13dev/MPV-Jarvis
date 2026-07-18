@@ -1,0 +1,146 @@
+# ============================================================
+# WhatsApp MVP — Docker Compose (Desarrollo Local)
+# ============================================================
+
+services:
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: wamvp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whatsapp_mvp}
+      POSTGRES_USER: ${POSTGRES_USER:-wamvp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword123}
+    ports:
+      - "5432:5432"   # Solo exponer en dev; en prod quitar este mapeo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wamvp_user} -d ${POSTGRES_DB:-whatsapp_mvp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wamvp_network
+
+  # --- WhatsApp Service (Node.js + Baileys) ---
+  whatsapp-service:
+    build:
+      context: ./whatsapp-service
+      dockerfile: Dockerfile
+    container_name: wamvp_whatsapp
+    restart: unless-stopped
+    environment:
+      PORT: ${WA_SERVICE_PORT:-3001}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8080}
+      BACKEND_WEBHOOK_URL: ${BACKEND_WEBHOOK_URL:-http://backend:8080/api/webhook/message}
+      WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET:-devsecret}
+      SESSION_NAME: ${WA_SESSION_NAME:-default}
+      NODE_ENV: development
+    volumes:
+      - wa_sessions:/app/sessions     # Persistencia de sesión WhatsApp
+      - wa_media:/app/media           # Archivos multimedia temporales
+    ports:
+      - "3001:3001"   # Solo para dev; en prod solo acceso interno
+    networks:
+      - wamvp_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Backend (Spring Boot) ---
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wamvp_backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-dev}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-whatsapp_mvp}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-wamvp_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-devpassword123}
+      JWT_SECRET: ${JWT_SECRET:-devsecretlongstringforjwtatleast64charslongfortesting123456}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      WA_SERVICE_URL: ${WA_SERVICE_URL:-http://whatsapp-service:3001}
+      WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET:-devsecret}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+    ports:
+      - "8080:8080"   # Solo para dev
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - wamvp_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # --- Frontend (Angular → Nginx) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wamvp_frontend
+    restart: unless-stopped
+    ports:
+      - "4200:80"     # Acceso dev en http://localhost:4200
+    networks:
+      - wamvp_network
+    depends_on:
+      - backend
+
+  # --- Nginx Reverse Proxy ---
+  nginx:
+    image: nginx:alpine
+    container_name: wamvp_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_ssl:/etc/letsencrypt
+      - nginx_logs:/var/log/nginx
+    networks:
+      - wamvp_network
+    depends_on:
+      - frontend
+      - backend
+
+# ============================================================
+# Volúmenes persistentes
+# ============================================================
+volumes:
+  postgres_data:
+    name: wamvp_postgres_data
+  wa_sessions:
+    name: wamvp_wa_sessions
+  wa_media:
+    name: wamvp_wa_media
+  backend_uploads:
+    name: wamvp_backend_uploads
+  nginx_ssl:
+    name: wamvp_nginx_ssl
+  nginx_logs:
+    name: wamvp_nginx_logs
+
+# ============================================================
+# Red interna
+# ============================================================
+networks:
+  wamvp_network:
+    name: wamvp_network
+    driver: bridge

@@ -1,0 +1,12 @@
+whatsapp-service/.env
+backend/.env
+.env
+*.log
+node_modules/
+sessions/
+dist/
+target/
+*.class
+.DS_Store
+Thumbs.db
+nginx_ssl/
