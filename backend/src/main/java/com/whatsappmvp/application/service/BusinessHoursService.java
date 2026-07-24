@@ -31,10 +31,7 @@ public class BusinessHoursService {
      */
     @Transactional(readOnly = true)
     public boolean isWithinBusinessHours() {
-        // TODO: Restaurar cuando se configuren horarios reales en DB
-        // return isWithinBusinessHours(LocalDateTime.now());
-        log.debug("[BusinessHours] Temporarily always open for testing");
-        return true;
+        return isWithinBusinessHours(LocalDateTime.now());
     }
 
     @Transactional(readOnly = true)
