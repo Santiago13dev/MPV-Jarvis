@@ -135,6 +135,7 @@ export interface BusinessConfig {
   businessName: string;
   businessType?: string;
   phoneNumber?: string;
+  adminPhone?: string;
   welcomeMessage?: string;
   offHoursMessage?: string;
   humanDelaySeconds: number;

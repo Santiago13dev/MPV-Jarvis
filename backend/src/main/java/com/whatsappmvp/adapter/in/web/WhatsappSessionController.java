@@ -43,4 +43,10 @@ public class WhatsappSessionController {
         whatsAppClient.disconnect();
         return ResponseEntity.ok(ApiResponse.ok("Disconnected", null));
     }
+
+    @PostMapping("/reset")
+    public ResponseEntity<ApiResponse<Void>> reset() {
+        whatsAppClient.resetSession();
+        return ResponseEntity.ok(ApiResponse.ok("Session reset", null));
+    }
 }

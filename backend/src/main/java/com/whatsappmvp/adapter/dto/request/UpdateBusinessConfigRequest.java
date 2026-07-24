@@ -13,4 +13,5 @@ public class UpdateBusinessConfigRequest {
     private Boolean aiEnabled;
     private String aiModel;
     private Integer maxAiTokens;
+    private String adminPhone;
 }

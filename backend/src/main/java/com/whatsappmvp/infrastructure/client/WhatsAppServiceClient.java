@@ -95,6 +95,11 @@ public class WhatsAppServiceClient {
         post("/session/disconnect", Map.of());
     }
 
+    /** Resetear sesión — borra credenciales y genera QR nuevo */
+    public void resetSession() {
+        post("/session/reset", Map.of());
+    }
+
     private Map<String, String> errorStatusMap(String status) {
         Map<String, String> map = new HashMap<>();
         map.put("status", status);
@@ -108,10 +113,6 @@ public class WhatsAppServiceClient {
                 .retrieve()
                 .bodyToMono(Void.class)
                 .timeout(Duration.ofSeconds(10))
-                .onErrorResume(e -> {
-                    log.error("[WA Client] Error calling {}: {}", path, e.getMessage());
-                    return Mono.empty();
-                })
-                .subscribe();
+                .block();
     }
 }

@@ -28,20 +28,27 @@ import { SessionStatus } from '../../core/models/models';
   styles: [`
     .topbar {
       height: var(--topbar-height);
+      padding-top: var(--safe-top);
       background: var(--color-bg-surface);
       border-bottom: 1px solid var(--color-border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 var(--spacing-lg);
+      gap: var(--spacing-sm);
+      padding-left: var(--content-padding);
+      padding-right: var(--content-padding);
       flex-shrink: 0;
     }
+    .topbar-left { min-width: 0; flex: 1; }
     .page-title {
       font-size: var(--font-size-lg);
       font-weight: 600;
       color: var(--color-text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .topbar-right { display: flex; align-items: center; gap: var(--spacing-md); }
+    .topbar-right { display: flex; align-items: center; gap: var(--spacing-md); flex-shrink: 0; }
 
     .session-pill {
       display: flex;
@@ -53,6 +60,17 @@ import { SessionStatus } from '../../core/models/models';
       font-weight: 500;
       border: 1px solid var(--color-border);
       background: var(--color-bg-input);
+      white-space: nowrap;
+    }
+
+    @media (max-width: 767px) {
+      .page-title { font-size: var(--font-size-md); }
+    }
+
+    /* En pantallas muy angostas solo se muestra el punto de estado */
+    @media (max-width: 380px) {
+      .session-pill { padding: 6px; gap: 0; }
+      .session-pill span:last-child { display: none; }
     }
     .pill-connected  { border-color: rgba(37,211,102,0.4); background: rgba(37,211,102,0.08); color: var(--color-success); }
     .pill-qr_ready   { border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.08); color: var(--color-warning); }

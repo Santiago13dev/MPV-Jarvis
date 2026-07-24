@@ -17,12 +17,13 @@ const {
   isJidBroadcast,
 } = require('@whiskeysockets/baileys');
 const path = require('path');
+const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const config = require('../config');
 const webhookService = require('./webhook.service');
 
-const logger = pino({ level: config.nodeEnv === 'production' ? 'info' : 'debug' });
+const logger = pino({ level: config.nodeEnv === 'production' ? 'warn' : 'debug' });
 
 // ── Estado interno del módulo ──────────────────────────────────────────────────
 let sock = null;
@@ -65,11 +66,11 @@ async function connect() {
 
     sock = makeWASocket({
       version,
-      logger: pino({ level: 'silent' }), // silenciar logs internos de baileys
+      logger: pino({ level: config.nodeEnv === 'production' ? 'warn' : 'silent' }),
       printQRInTerminal: config.nodeEnv !== 'production',
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: config.nodeEnv === 'production' ? 'warn' : 'silent' })),
       },
       // Configuraciones para reducir probabilidad de baneo
       defaultQueryTimeoutMs: 60_000,
@@ -109,17 +110,33 @@ async function connect() {
       // Conexión cerrada
       if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        logger.warn({ statusCode, shouldReconnect }, '[WA] Connection closed');
+        logger.warn({ statusCode }, '[WA] Connection closed');
 
-        if (shouldReconnect) {
-          scheduleReconnect();
-        } else {
-          // Usuario cerró sesión desde el teléfono — borrar credenciales
+        // 401 = Logged Out — usuario cerró sesión desde el teléfono
+        if (statusCode === DisconnectReason.loggedOut) {
           await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
           logger.info('[WA] Session logged out — credentials cleared');
+          return;
         }
+
+        // 403 = Forbidden — número baneado, no reconectar
+        if (statusCode === 403) {
+          await setStatus('ERROR', { error: 'Number may be banned (403)' });
+          logger.error('[WA] Number may be banned — not reconnecting');
+          return;
+        }
+
+        // 440 = Connection Replaced — otro dispositivo se conectó
+        if (statusCode === 440) {
+          logger.warn('[WA] Connection replaced by another device — waiting 30s');
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 30_000);
+          return;
+        }
+
+        // Cualquier otro código: reconectar con backoff
+        scheduleReconnect();
       }
     });
 
@@ -166,11 +183,17 @@ async function connect() {
 /**
  * Reconexión con backoff exponencial
  * Delay = min(base * 2^intentos, 60 segundos)
+ * Después de max intentos, espera 5 minutos y reinicia el contador
  */
 function scheduleReconnect() {
   if (reconnectAttempts >= config.maxReconnectAttempts) {
-    logger.error('[WA] Max reconnect attempts reached — giving up');
-    setStatus('ERROR', { error: 'Max reconnect attempts reached' });
+    logger.warn('[WA] Max attempts reached — cooldown 5 min before retrying');
+    setStatus('ERROR', { error: 'Reconnecting after cooldown' });
+    // Después de 5 minutos, reiniciar contador y volver a intentar
+    reconnectTimer = setTimeout(() => {
+      reconnectAttempts = 0;
+      connect();
+    }, 5 * 60 * 1000);
     return;
   }
 
@@ -199,6 +222,40 @@ async function disconnect() {
     logger.info('[WA] Disconnected manually');
   } catch (err) {
     logger.error({ err }, '[WA] Error during disconnect');
+    throw err;
+  }
+}
+
+/**
+ * Resetear sesión — borra credenciales y reconecta con QR nuevo
+ */
+async function resetSession() {
+  try {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectAttempts = 0;
+
+    // Cerrar socket actual si existe
+    if (sock) {
+      try { await sock.logout(); } catch (_) {}
+      sock = null;
+    }
+
+    // Borrar carpeta de credenciales de sesión
+    const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
+    if (fs.existsSync(sessionsPath)) {
+      fs.rmSync(sessionsPath, { recursive: true, force: true });
+      logger.info({ path: sessionsPath }, '[WA] Session credentials deleted');
+    }
+
+    qrBase64 = null;
+    await setStatus('DISCONNECTED', { reason: 'RESET' });
+    logger.info('[WA] Session reset — reconnecting fresh');
+
+    // Reconexión inmediata con sesión limpia
+    await connect();
+  } catch (err) {
+    logger.error({ err }, '[WA] Error during resetSession');
+    await setStatus('ERROR', { error: err.message });
     throw err;
   }
 }
@@ -271,6 +328,7 @@ async function sendLocationMessage(to, latitude, longitude, name = '') {
 module.exports = {
   connect,
   disconnect,
+  resetSession,
   getStatus,
   getQR,
   getSocket,

@@ -19,6 +19,7 @@ import { WebSocketService } from '../../core/services/websocket.service';
     .layout {
       display: flex;
       height: 100vh;
+      height: 100dvh;
       overflow: hidden;
       background: var(--color-bg);
     }
@@ -32,7 +33,16 @@ import { WebSocketService } from '../../core/services/websocket.service';
     .content {
       flex: 1;
       overflow-y: auto;
-      padding: var(--spacing-lg);
+      -webkit-overflow-scrolling: touch;
+      padding: var(--content-padding);
+    }
+
+    /* En móvil la navegación pasa de sidebar lateral a barra inferior:
+       se deja espacio para que el contenido no quede tapado. */
+    @media (max-width: 767px) {
+      .content {
+        padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + var(--spacing-md));
+      }
     }
   `]
 })

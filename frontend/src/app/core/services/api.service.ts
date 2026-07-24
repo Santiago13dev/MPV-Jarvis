@@ -50,6 +50,12 @@ export class ApiService {
     );
   }
 
+  deleteConversation(conversationId: string): Observable<ApiResponse<void>> {
+    return this.http.delete<ApiResponse<void>>(
+      `${this.base}/conversations/${conversationId}`
+    );
+  }
+
   // ── FAQs ────────────────────────────────────────────────────
   getFaqs(): Observable<ApiResponse<FaqItem[]>> {
     return this.http.get<ApiResponse<FaqItem[]>>(`${this.base}/faqs`);
@@ -103,6 +109,10 @@ export class ApiService {
 
   disconnectWhatsapp(): Observable<ApiResponse<void>> {
     return this.http.post<ApiResponse<void>>(`${this.base}/whatsapp/disconnect`, {});
+  }
+
+  resetWhatsapp(): Observable<ApiResponse<void>> {
+    return this.http.post<ApiResponse<void>>(`${this.base}/whatsapp/reset`, {});
   }
 
   // ── Metrics ─────────────────────────────────────────────────

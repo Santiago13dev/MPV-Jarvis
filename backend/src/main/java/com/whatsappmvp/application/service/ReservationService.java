@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -53,6 +54,16 @@ public class ReservationService {
     @Transactional
     public void deleteReservation(UUID id) {
         reservationRepository.deleteById(id);
+    }
+
+    @Transactional
+    public Optional<ReservationEntity> cancelLatestByPhoneNumber(String phoneNumber) {
+        Optional<ReservationEntity> opt = reservationRepository.findLatestActiveByPhoneNumber(phoneNumber);
+        if (opt.isEmpty()) return Optional.empty();
+        ReservationEntity entity = opt.get();
+        entity.setStatus(ReservationStatus.CANCELADA);
+        reservationRepository.save(entity);
+        return Optional.of(entity);
     }
 
     private ReservationResponse mapToResponse(ReservationEntity entity) {

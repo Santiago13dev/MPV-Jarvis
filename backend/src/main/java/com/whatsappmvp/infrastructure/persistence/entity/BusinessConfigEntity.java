@@ -30,6 +30,9 @@ public class BusinessConfigEntity {
     @Column(name = "phone_number")
     private String phoneNumber;
 
+    @Column(name = "admin_phone")
+    private String adminPhone;
+
     @Column(name = "welcome_message", columnDefinition = "TEXT")
     private String welcomeMessage;
 

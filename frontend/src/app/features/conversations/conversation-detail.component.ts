@@ -41,6 +41,12 @@ import { Message, Conversation } from '../../core/models/models';
             title="Devolver al bot">
             🤖 Devolver al bot
           </button>
+          <button
+            class="btn btn-danger btn-sm"
+            (click)="deleteConversation()"
+            title="Eliminar conversación">
+            🗑
+          </button>
         </div>
       </div>
 
@@ -110,11 +116,24 @@ import { Message, Conversation } from '../../core/models/models';
     .detail-wrapper {
       display: flex;
       flex-direction: column;
-      height: calc(100vh - var(--topbar-height) - var(--spacing-lg) * 2);
+      height: calc(100dvh - var(--topbar-height) - var(--content-padding) * 2);
       background: var(--color-bg-card);
       border: 1px solid var(--color-border);
       border-radius: var(--radius-lg);
       overflow: hidden;
+    }
+
+    /* En móvil el chat se despliega a pantalla completa (estilo WhatsApp),
+       sumando el espacio de la bottom-nav que reserva .content */
+    @media (max-width: 767px) {
+      .detail-wrapper {
+        height: calc(100dvh - var(--topbar-height) - var(--content-padding) * 2 - var(--bottom-nav-height) - var(--safe-bottom) - var(--spacing-md));
+        border-radius: var(--radius-md);
+        margin: calc(var(--content-padding) * -1);
+        width: calc(100% + var(--content-padding) * 2);
+        border-left: none;
+        border-right: none;
+      }
     }
 
     /* Header */
@@ -126,6 +145,13 @@ import { Message, Conversation } from '../../core/models/models';
       border-bottom: 1px solid var(--color-border);
       background: var(--color-bg-surface);
       flex-shrink: 0;
+    }
+
+    @media (max-width: 767px) {
+      .detail-header { padding: var(--spacing-sm) var(--spacing-md); gap: var(--spacing-sm); flex-wrap: wrap; }
+      .header-actions { flex-wrap: wrap; }
+      .header-actions .btn { font-size: var(--font-size-xs); padding: 6px 10px; }
+      .contact-info strong { font-size: var(--font-size-sm); }
     }
     .header-contact {
       display: flex; align-items: center; gap: var(--spacing-sm); flex: 1;
@@ -143,10 +169,15 @@ import { Message, Conversation } from '../../core/models/models';
     .messages-area {
       flex: 1;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       padding: var(--spacing-md) var(--spacing-lg);
       display: flex;
       flex-direction: column;
       gap: 4px;
+    }
+
+    @media (max-width: 767px) {
+      .messages-area { padding: var(--spacing-sm) var(--spacing-md); }
     }
     .loading-messages { display: flex; justify-content: center; padding: var(--spacing-lg); }
 
@@ -177,6 +208,10 @@ import { Message, Conversation } from '../../core/models/models';
         background: rgba(37,211,102,0.12);
         border-color: rgba(37,211,102,0.25);
       }
+    }
+
+    @media (max-width: 767px) {
+      .bubble { max-width: 84%; }
     }
     .bubble-text {
       font-size: var(--font-size-md);
@@ -214,6 +249,10 @@ import { Message, Conversation } from '../../core/models/models';
       border-top: 1px solid var(--color-border);
       background: var(--color-bg-surface);
       flex-shrink: 0;
+    }
+
+    @media (max-width: 767px) {
+      .reply-bar { padding: var(--spacing-sm) var(--spacing-md); padding-bottom: calc(var(--spacing-sm) + var(--safe-bottom)); }
     }
     .reply-input-wrapper { flex: 1; }
     .reply-input {
@@ -317,6 +356,13 @@ export class ConversationDetailComponent implements OnInit, OnDestroy, AfterView
   release(): void {
     this.api.releaseConversation(this.conversationId).subscribe(() => {
       if (this.conversation) this.conversation.status = 'AUTO';
+    });
+  }
+
+  deleteConversation(): void {
+    if (!confirm('¿Eliminar esta conversación?')) return;
+    this.api.deleteConversation(this.conversationId).subscribe(() => {
+      this.router.navigate(['/conversations']);
     });
   }
 

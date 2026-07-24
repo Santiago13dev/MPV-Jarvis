@@ -36,6 +36,11 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
           <label>Segundos antes de transferir a humano</label>
           <input class="form-control" type="number" [(ngModel)]="config.humanDelaySeconds" min="0" max="3600">
         </div>
+        <div class="form-group">
+          <label>Teléfono del asesor (notificaciones)</label>
+          <input class="form-control" [(ngModel)]="config.adminPhone" placeholder="573123197433">
+          <small class="text-xs text-muted">Número al que se envía la alerta cuando un cliente necesita atención humana</small>
+        </div>
         <div class="toggle-row">
           <div>
             <strong>Inteligencia Artificial</strong>
@@ -107,8 +112,15 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
       @media (max-width: 860px) { grid-template-columns: 1fr; }
     }
 
+    @media (max-width: 767px) {
+      .config-grid { gap: var(--spacing-md); }
+      .config-grid .card { padding: var(--spacing-md); }
+      .config-grid .btn { width: 100%; justify-content: center; }
+    }
+
     .toggle-row {
       display: flex; align-items: center; justify-content: space-between;
+      gap: var(--spacing-md);
       padding: var(--spacing-md) 0; border-top: 1px solid var(--color-border);
       border-bottom: 1px solid var(--color-border); margin: var(--spacing-md) 0;
     }
@@ -140,16 +152,29 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
     .hours-list { display: flex; flex-direction: column; gap: var(--spacing-sm); }
     .hours-row {
       display: flex; align-items: center; justify-content: space-between;
+      gap: var(--spacing-sm);
       padding: 8px 0; border-bottom: 1px solid var(--color-border);
       &:last-child { border-bottom: none; }
     }
-    .day-toggle { display: flex; align-items: center; gap: var(--spacing-sm); width: 110px; }
+    .day-toggle { display: flex; align-items: center; gap: var(--spacing-sm); width: 110px; flex-shrink: 0; }
     .day-name { font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-muted);
       &.day-active { color: var(--color-text-primary); } }
     .time-inputs { display: flex; align-items: center; gap: var(--spacing-sm);
       &.disabled { opacity: 0.4; pointer-events: none; } }
     .time-input { width: 100px; padding: 6px 10px; font-size: var(--font-size-sm); }
     .time-sep { color: var(--color-text-muted); }
+
+    @media (max-width: 420px) {
+      .hours-row { flex-wrap: wrap; }
+      .day-toggle { width: auto; }
+      .time-inputs { width: 100%; justify-content: flex-end; }
+      .time-input { width: 90px; min-height: 36px; padding: 5px 8px; }
+    }
+
+    @media (max-width: 340px) {
+      .time-inputs { justify-content: space-between; }
+      .time-input { flex: 1; width: auto; }
+    }
   `]
 })
 export class BusinessConfigComponent implements OnInit {

@@ -69,10 +69,44 @@
   /* Sidebar */
   --sidebar-width: 260px;
   --topbar-height: 64px;
+  --bottom-nav-height: 62px;
+  --content-padding: var(--spacing-lg);
+
+  /* Safe areas (notch / gesture bar) */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
 
   /* Transiciones */
   --transition-fast: 150ms ease;
   --transition-md:   250ms ease;
+}
+
+/* ── Breakpoints ───────────────────────────────────────────────
+   >= 1024px : desktop (sidebar fija)
+   768–1023  : tablet  (sidebar fija, más angosta)
+   < 768     : móvil   (sidebar oculta, bottom nav)
+   ──────────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  :root {
+    --sidebar-width: 220px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --content-padding: var(--spacing-md);
+    --topbar-height: 56px;
+    --font-size-2xl: 21px;
+    --font-size-3xl: 26px;
+  }
+}
+
+@media (max-width: 380px) {
+  :root {
+    --content-padding: var(--spacing-sm);
+  }
 }
 
 /* ── Reset & Base ──────────────────────────────────────────── */
@@ -80,13 +114,21 @@
 
 html, body {
   height: 100%;
+  height: 100dvh;
   font-family: var(--font-family);
   font-size: var(--font-size-md);
   background-color: var(--color-bg);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
 }
+
+app-root { display: block; height: 100%; }
+
+img, svg { max-width: 100%; }
 
 a { color: var(--color-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -137,6 +179,7 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  min-height: 40px;
 
   &:disabled { opacity: 0.5; cursor: not-allowed; }
 }
@@ -197,6 +240,11 @@ a:hover { text-decoration: underline; }
   font-size: var(--font-size-md);
   transition: border-color var(--transition-fast);
   outline: none;
+  min-height: 42px;
+
+  @media (max-width: 767px) {
+    font-size: 16px; /* evita el zoom automático de iOS al enfocar */
+  }
 
   &::placeholder { color: var(--color-text-muted); }
   &:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(232,132,92,0.15); }
@@ -223,7 +271,18 @@ textarea.form-control { resize: vertical; min-height: 100px; }
 .badge-muted    { background: var(--color-bg-input); color: var(--color-text-secondary); }
 
 /* ── Tables ────────────────────────────────────────────────── */
-.table-container { overflow-x: auto; border-radius: var(--radius-lg); border: 1px solid var(--color-border); }
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background:
+    linear-gradient(to right, var(--color-bg-card) 0%, rgba(255,255,255,0) 20px),
+    linear-gradient(to left, var(--color-bg-card) 0%, rgba(255,255,255,0) 20px) right;
+  background-repeat: no-repeat;
+  background-size: 20px 100%, 20px 100%;
+  background-attachment: local, local;
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -253,9 +312,15 @@ table {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
   margin-bottom: var(--spacing-lg);
   h1 { font-size: var(--font-size-2xl); font-weight: 700; }
   p  { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: 4px; }
+
+  @media (max-width: 480px) {
+    > button, > .btn { width: 100%; justify-content: center; }
+  }
 }
 
 /* ── Toast / Alert ─────────────────────────────────────────── */
@@ -304,4 +369,14 @@ table {
   .empty-icon { font-size: 48px; opacity: 0.3; }
   h3 { font-size: var(--font-size-lg); color: var(--color-text-secondary); }
   p  { font-size: var(--font-size-sm); }
+
+  @media (max-width: 480px) {
+    padding: var(--spacing-xl) var(--spacing-md);
+    .empty-icon { font-size: 40px; }
+  }
+}
+
+/* ── Scrollbar oculta en touch (mobile) ───────────────────────── */
+@media (max-width: 767px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
 }

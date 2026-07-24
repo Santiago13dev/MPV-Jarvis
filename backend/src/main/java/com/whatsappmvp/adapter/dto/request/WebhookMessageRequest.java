@@ -6,6 +6,7 @@ import lombok.Data;
 public class WebhookMessageRequest {
     private String waMessageId;
     private String phone;
+    private String remoteJid;
     private String displayName;
     private String content;
     private String messageType;

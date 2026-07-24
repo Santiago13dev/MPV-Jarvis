@@ -61,11 +61,16 @@ function extractMessageContent(msg) {
 async function forwardIncomingMessage(msg) {
   const { text, type, location } = extractMessageContent(msg);
 
-  const phone = msg.key.remoteJid.replace('@s.whatsapp.net', '').replace('@c.us', '');
+  const remoteJid = msg.key.remoteJid;
+  const phone = remoteJid
+    .replace('@s.whatsapp.net', '')
+    .replace('@c.us', '')
+    .replace('@lid', '');
 
   const payload = {
     waMessageId: msg.key.id,
     phone,
+    remoteJid,
     displayName: msg.pushName || null,
     content: text,
     messageType: type,

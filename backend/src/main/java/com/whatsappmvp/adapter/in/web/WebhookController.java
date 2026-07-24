@@ -51,7 +51,7 @@ public class WebhookController {
         new Thread(() -> {
             try {
                 messageProcessingService.processIncomingMessage(
-                    req.getPhone(), req.getDisplayName(),
+                    req.getPhone(), req.getRemoteJid(), req.getDisplayName(),
                     req.getContent(), req.getWaMessageId(), finalType
                 );
             } catch (Exception e) {

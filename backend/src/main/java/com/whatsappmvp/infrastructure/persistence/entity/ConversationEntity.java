@@ -43,6 +43,19 @@ public class ConversationEntity {
     @Builder.Default
     private Integer unreadCount = 0;
 
+    @Column(name = "pending_action", length = 50)
+    private String pendingAction;
+
+    @Column(name = "pending_action_data", columnDefinition = "TEXT")
+    private String pendingActionData;
+
+    @Column(name = "remote_jid", length = 100)
+    private String remoteJid;
+
+    @Column(name = "is_deleted")
+    @Builder.Default
+    private Boolean isDeleted = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "assigned_to")
     private UserEntity assignedTo;

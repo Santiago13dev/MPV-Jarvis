@@ -28,4 +28,16 @@ public interface MessageJpaRepository extends JpaRepository<MessageEntity, UUID>
 
     @Query("SELECT COALESCE(SUM(m.aiTokensUsed), 0) FROM MessageEntity m WHERE DATE(m.sentAt) = :date")
     long sumAiTokensByDate(@Param("date") LocalDate date);
+
+    @Query("SELECT COUNT(m) FROM MessageEntity m WHERE DATE(m.sentAt) = :date AND m.processedBy = 'AI' AND m.direction = 'OUTBOUND'")
+    long countAiCallsByDate(@Param("date") LocalDate date);
+
+    @Query("SELECT COUNT(m) FROM MessageEntity m WHERE DATE(m.sentAt) = :date AND m.processedBy = 'FAQ' AND m.direction = 'OUTBOUND'")
+    long countFaqByDate(@Param("date") LocalDate date);
+
+    @Query("SELECT COUNT(m) FROM MessageEntity m WHERE DATE(m.sentAt) = :date AND m.processedBy = 'KEYWORD' AND m.direction = 'OUTBOUND'")
+    long countKeywordByDate(@Param("date") LocalDate date);
+
+    @Query("SELECT COUNT(m) FROM MessageEntity m WHERE DATE(m.sentAt) = :date AND m.processedBy = 'HUMAN' AND m.direction = 'OUTBOUND'")
+    long countHumanByDate(@Param("date") LocalDate date);
 }

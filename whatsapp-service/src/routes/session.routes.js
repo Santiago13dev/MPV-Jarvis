@@ -59,4 +59,14 @@ router.post('/disconnect', async (req, res) => {
   }
 });
 
+// POST /session/reset — borrar sesión y reconectar con QR nuevo
+router.post('/reset', async (req, res) => {
+  try {
+    await waClient.resetSession();
+    res.json({ message: 'Session reset successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

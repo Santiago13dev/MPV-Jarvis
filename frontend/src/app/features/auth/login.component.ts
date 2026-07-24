@@ -69,16 +69,23 @@ import { AuthService } from '../../core/auth/auth.service';
   styles: [`
     .login-page {
       min-height: 100vh;
+      min-height: 100dvh;
       display: flex;
       align-items: center;
       justify-content: center;
       background: var(--color-bg);
       padding: var(--spacing-lg);
+      padding-top: calc(var(--spacing-lg) + var(--safe-top));
+      padding-bottom: calc(var(--spacing-lg) + var(--safe-bottom));
       background-image: radial-gradient(
         ellipse at 50% 0%,
         rgba(37, 211, 102, 0.05) 0%,
         transparent 70%
       );
+    }
+
+    @media (max-width: 420px) {
+      .login-page { padding: var(--spacing-md); }
     }
 
     .login-card {
@@ -89,11 +96,19 @@ import { AuthService } from '../../core/auth/auth.service';
       gap: var(--spacing-lg);
     }
 
+    @media (max-width: 420px) {
+      .login-card { padding: var(--spacing-lg) var(--spacing-md); gap: var(--spacing-md); }
+    }
+
     .login-header {
       text-align: center;
       .login-logo { font-size: 56px; margin-bottom: var(--spacing-sm); }
       h1 { font-size: var(--font-size-2xl); font-weight: 700; }
       p  { margin-top: 4px; }
+    }
+
+    @media (max-width: 420px) {
+      .login-header .login-logo { font-size: 44px; }
     }
 
     form { display: flex; flex-direction: column; gap: var(--spacing-md); }

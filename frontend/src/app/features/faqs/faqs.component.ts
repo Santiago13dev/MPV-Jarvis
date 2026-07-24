@@ -163,6 +163,11 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
       display: flex; gap: var(--spacing-sm); flex-wrap: wrap;
       margin-bottom: var(--spacing-lg);
     }
+
+    @media (max-width: 767px) {
+      .stat-chip { font-size: var(--font-size-xs); padding: 5px 10px; }
+      .top-chip strong { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+    }
     .stat-chip {
       padding: 6px 14px; border-radius: var(--radius-full);
       background: var(--color-bg-input); border: 1px solid var(--color-border);
@@ -172,6 +177,55 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
     .top-chip { border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.08); color: var(--color-warning); }
 
     .row-inactive td { opacity: 0.5; }
+
+    /* ── Tabla → tarjetas en mobile ───────────────────────── */
+    @media (max-width: 700px) {
+      .table-container { overflow: visible; border: none; background: none; }
+      table, thead, tbody, tr, td { display: block; width: 100%; }
+      thead { display: none; }
+
+      tr {
+        background: var(--color-bg-card);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-sm) var(--spacing-md);
+        margin-bottom: var(--spacing-sm);
+        box-shadow: var(--shadow-sm);
+      }
+      tr.row-inactive td { opacity: 1; }
+
+      td {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--spacing-md);
+        padding: 7px 0;
+        border-bottom: 1px dashed var(--color-border);
+        text-align: right;
+
+        &::before {
+          content: attr(data-label);
+          font-size: var(--font-size-xs);
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--color-text-secondary);
+          text-align: left;
+          flex-shrink: 0;
+          padding-top: 2px;
+        }
+      }
+      td:last-child { border-bottom: none; }
+      td:nth-of-type(1) { display: none; } /* # */
+      td:nth-of-type(2)::before { content: 'Pregunta'; }
+      td:nth-of-type(3)::before { content: 'Respuesta'; }
+      td:nth-of-type(3) .faq-answer { text-align: right; }
+      td:nth-of-type(4)::before { content: 'Keywords'; }
+      td:nth-of-type(4) .keywords-wrap { justify-content: flex-end; }
+      td:nth-of-type(5)::before { content: 'Usos'; }
+      td:nth-of-type(6)::before { content: 'Estado'; }
+      td:nth-of-type(7)::before { content: 'Acciones'; }
+    }
 
     .faq-question { font-size: var(--font-size-sm); }
     .faq-answer   { font-size: var(--font-size-sm); }
@@ -190,6 +244,18 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
       display: flex; flex-direction: column; gap: 0;
       max-height: 90vh; overflow: hidden;
     }
+
+    @media (max-width: 640px) {
+      .modal-overlay { padding: 0; align-items: flex-end; }
+      .modal-dialog {
+        max-width: none;
+        max-height: 92dvh;
+        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        padding-bottom: calc(var(--spacing-lg) + var(--safe-bottom));
+        animation: slideUp var(--transition-md) ease;
+      }
+    }
+    @keyframes slideUp { from { transform: translateY(24px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
     .modal-header {
       display: flex; align-items: center; justify-content: space-between;
       padding-bottom: var(--spacing-md); border-bottom: 1px solid var(--color-border);

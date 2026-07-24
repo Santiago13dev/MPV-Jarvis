@@ -42,6 +42,7 @@ public class BusinessConfigController {
         if (req.getAiEnabled()         != null) config.setAiEnabled(req.getAiEnabled());
         if (req.getAiModel()           != null) config.setAiModel(req.getAiModel());
         if (req.getMaxAiTokens()       != null) config.setMaxAiTokens(req.getMaxAiTokens());
+        if (req.getAdminPhone()         != null) config.setAdminPhone(req.getAdminPhone());
         return ResponseEntity.ok(ApiResponse.ok(configRepository.save(config)));
     }
 

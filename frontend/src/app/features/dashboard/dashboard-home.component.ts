@@ -81,6 +81,21 @@ interface MetricCard {
       .metric-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: 6px; }
     }
 
+    @media (max-width: 767px) {
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); gap: var(--spacing-sm); }
+      .metric-card {
+        padding: var(--spacing-md) var(--spacing-sm);
+        &:hover { transform: none; }
+        .metric-icon  { font-size: 28px; margin-bottom: 4px; }
+        .metric-value { font-size: 26px; }
+        .metric-label { font-size: var(--font-size-xs); }
+      }
+    }
+
+    @media (max-width: 360px) {
+      .metrics-grid { grid-template-columns: 1fr 1fr; }
+    }
+
     .automation-card {
       h3 { font-size: var(--font-size-lg); font-weight: 700; margin-bottom: var(--spacing-md); }
     }

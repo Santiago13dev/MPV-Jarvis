@@ -45,6 +45,11 @@ import { SessionStatus } from '../../core/models/models';
             *ngIf="status === 'CONNECTED'">
             ⏹ Desconectar
           </button>
+          <button class="btn btn-warning" (click)="resetSession()"
+            *ngIf="status !== 'CONNECTED'" [disabled]="status === 'CONNECTING'"
+            title="Borrar credenciales y generar un QR nuevo">
+            🔄 Reiniciar sesión
+          </button>
           <button class="btn btn-secondary" (click)="refreshStatus()">
             Actualizar estado
           </button>
@@ -103,6 +108,7 @@ import { SessionStatus } from '../../core/models/models';
             <li>Mantén el teléfono con batería y conexión a internet</li>
             <li>No cierres WhatsApp en el teléfono</li>
             <li>La sesión persiste incluso si reinicias el servidor</li>
+            <li>Si el QR no aparece o da error, usa <strong>"Reiniciar sesión"</strong> para generar uno nuevo</li>
           </ul>
         </div>
       </div>
@@ -117,12 +123,28 @@ import { SessionStatus } from '../../core/models/models';
       @media (max-width: 900px) { grid-template-columns: 1fr; }
     }
 
+    @media (max-width: 767px) {
+      .wa-grid { gap: var(--spacing-md); }
+      .wa-grid .card { padding: var(--spacing-md); }
+    }
+
     /* Status card */
     .status-card { grid-column: 1 / -1; }
     .status-indicator {
       display: flex; align-items: center; gap: var(--spacing-lg);
       padding: var(--spacing-md) 0;
     }
+
+    @media (max-width: 480px) {
+      .status-indicator {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: var(--spacing-md);
+      }
+      .status-info h2 { font-size: var(--font-size-xl); }
+    }
+
     .status-ring {
       width: 80px; height: 80px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
@@ -142,6 +164,21 @@ import { SessionStatus } from '../../core/models/models';
       margin-top: var(--spacing-lg);
       padding-top: var(--spacing-lg);
       border-top: 1px solid var(--color-border);
+      flex-wrap: wrap;
+    }
+
+    .btn-warning {
+      background: rgba(245,158,11,0.15);
+      color: var(--color-warning, #f59e0b);
+      border: 1px solid rgba(245,158,11,0.3);
+    }
+    .btn-warning:hover:not(:disabled) {
+      background: rgba(245,158,11,0.25);
+    }
+
+    @media (max-width: 480px) {
+      .action-buttons { flex-direction: column; }
+      .action-buttons .btn { width: 100%; justify-content: center; }
     }
 
     /* QR card */
@@ -149,6 +186,7 @@ import { SessionStatus } from '../../core/models/models';
     .qr-wrapper { display: flex; flex-direction: column; align-items: center; }
     .qr-image {
       width: 240px; height: 240px;
+      max-width: 100%;
       border-radius: var(--radius-md);
       border: 4px solid var(--color-primary);
       box-shadow: var(--shadow-glow);
@@ -156,6 +194,11 @@ import { SessionStatus } from '../../core/models/models';
     .qr-placeholder {
       display: flex; flex-direction: column; align-items: center;
       justify-content: center; height: 200px;
+    }
+
+    @media (max-width: 480px) {
+      .qr-image { width: 200px; height: 200px; }
+      .qr-placeholder { height: 160px; }
     }
 
     /* Instructions */
@@ -175,6 +218,10 @@ import { SessionStatus } from '../../core/models/models';
       background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.3);
       border-radius: var(--radius-md); padding: var(--spacing-md);
       font-size: var(--font-size-sm); color: var(--color-warning);
+    }
+
+    @media (max-width: 480px) {
+      .step { font-size: var(--font-size-sm); gap: var(--spacing-sm); }
     }
   `]
 })
@@ -272,6 +319,15 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
       this.status = 'DISCONNECTED';
       this.qrCode = null;
     });
+  }
+
+  resetSession(): void {
+    if (!confirm('¿Reiniciar la sesión? Se borrarán las credenciales y se generará un QR nuevo. Deberás escanear el QR con tu teléfono.')) return;
+    this.status = 'CONNECTING';
+    this.qrCode = null;
+    this.api.resetWhatsapp().pipe(
+      catchError(() => EMPTY)
+    ).subscribe(() => this.refreshStatus());
   }
 
   ngOnDestroy(): void {

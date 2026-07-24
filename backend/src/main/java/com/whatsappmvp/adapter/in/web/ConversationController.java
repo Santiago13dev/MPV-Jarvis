@@ -12,6 +12,7 @@ import com.whatsappmvp.infrastructure.persistence.entity.ConversationEntity;
 import com.whatsappmvp.infrastructure.persistence.entity.MessageEntity;
 import com.whatsappmvp.infrastructure.persistence.jpa.ConversationJpaRepository;
 import com.whatsappmvp.infrastructure.persistence.jpa.MessageJpaRepository;
+import com.whatsappmvp.infrastructure.websocket.WebSocketEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -19,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -29,6 +31,7 @@ public class ConversationController {
     private final ConversationJpaRepository conversationRepository;
     private final MessageJpaRepository messageRepository;
     private final WhatsAppServiceClient whatsAppClient;
+    private final WebSocketEventPublisher wsPublisher;
 
     @GetMapping("/conversations")
     public ResponseEntity<ApiResponse<Page<ConversationEntity>>> list(
@@ -67,6 +70,16 @@ public class ConversationController {
             .orElseThrow(() -> new NotFoundException("Conversation", id));
         c.setStatus(ConversationStatus.HUMAN_TAKEOVER);
         conversationRepository.save(c);
+
+        // Notificar al dashboard via WebSocket
+        wsPublisher.publishConversationUpdate(Map.of(
+                "type", "CONVERSATION_UPDATE",
+                "conversationId", c.getId().toString(),
+                "status", "HUMAN_TAKEOVER",
+                "unreadCount", c.getUnreadCount(),
+                "lastMessageAt", c.getLastMessageAt() != null ? c.getLastMessageAt().toString() : ""
+        ));
+
         return ResponseEntity.ok(ApiResponse.ok("Taken over", null));
     }
 
@@ -77,7 +90,32 @@ public class ConversationController {
         c.setStatus(ConversationStatus.AUTO);
         c.setUnreadCount(0);
         conversationRepository.save(c);
+
+        // Notificar al dashboard via WebSocket
+        wsPublisher.publishConversationUpdate(Map.of(
+                "type", "CONVERSATION_UPDATE",
+                "conversationId", c.getId().toString(),
+                "status", "AUTO",
+                "unreadCount", 0,
+                "lastMessageAt", c.getLastMessageAt() != null ? c.getLastMessageAt().toString() : ""
+        ));
+
         return ResponseEntity.ok(ApiResponse.ok("Released to bot", null));
+    }
+
+    @DeleteMapping("/conversations/{id}")
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID id) {
+        ConversationEntity c = conversationRepository.findById(id)
+            .orElseThrow(() -> new NotFoundException("Conversation", id));
+        c.setIsDeleted(true);
+        conversationRepository.save(c);
+
+        wsPublisher.publishConversationUpdate(Map.of(
+                "type", "CONVERSATION_DELETE",
+                "conversationId", c.getId().toString()
+        ));
+
+        return ResponseEntity.ok(ApiResponse.ok("Conversation deleted", null));
     }
 
     @PostMapping("/messages/send")
@@ -85,7 +123,12 @@ public class ConversationController {
         ConversationEntity conv = conversationRepository.findById(UUID.fromString(req.getConversationId()))
             .orElseThrow(() -> new NotFoundException("Conversation", req.getConversationId()));
 
-        whatsAppClient.sendText(conv.getContact().getPhone(), req.getText());
+        // Usar remoteJid si está disponible, sino usar phone@s.whatsapp.net
+        String targetJid = conv.getRemoteJid() != null && !conv.getRemoteJid().isBlank()
+            ? conv.getRemoteJid()
+            : conv.getContact().getPhone() + "@s.whatsapp.net";
+
+        whatsAppClient.sendText(targetJid, req.getText());
 
         MessageEntity msg = MessageEntity.builder()
             .conversation(conv)

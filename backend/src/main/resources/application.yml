@@ -54,13 +54,13 @@ app:
     expiration-ms: ${JWT_EXPIRATION_MS:86400000}          # 24h
     refresh-expiration-ms: ${JWT_REFRESH_EXPIRATION_MS:604800000}  # 7 días
 
-  # ── OpenAI ──────────────────────────────────────────────────────────────────
+  # ── AI Provider (Groq — OpenAI-compatible) ──────────────────────────────────
   openai:
-    api-key: ${OPENAI_API_KEY:}
-    model: ${OPENAI_MODEL:gpt-4o-mini}
-    max-tokens: ${OPENAI_MAX_TOKENS:500}
-    temperature: ${OPENAI_TEMPERATURE:0.4}
-    base-url: https://api.openai.com/v1
+    api-key: ${GROQ_API_KEY:}
+    model: ${AI_MODEL:llama-3.1-8b-instant}
+    max-tokens: ${AI_MAX_TOKENS:500}
+    temperature: ${AI_TEMPERATURE:0.4}
+    base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
 
   # ── WhatsApp Service ────────────────────────────────────────────────────────
   whatsapp:
@@ -72,6 +72,7 @@ app:
     email: ${ADMIN_EMAIL:admin@example.com}
     password: ${ADMIN_PASSWORD:admin123}
     full-name: Administrador
+    phone: ${ADMIN_PHONE:}
 
   # ── Rate Limiting ────────────────────────────────────────────────────────────
   rate-limit:
