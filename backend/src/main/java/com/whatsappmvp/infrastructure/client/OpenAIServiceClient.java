@@ -72,6 +72,12 @@ public class OpenAIServiceClient {
                     .uri("/chat/completions")
                     .bodyValue(requestBody)
                     .retrieve()
+                    .onStatus(status -> status.isError(), clientResponse ->
+                        clientResponse.bodyToMono(String.class)
+                            .map(body -> {
+                                log.error("[OpenAI] API error ({}): {}", clientResponse.statusCode(), body);
+                                return new RuntimeException("API error: " + clientResponse.statusCode());
+                            }))
                     .bodyToMono(Map.class)
                     .timeout(Duration.ofSeconds(30))
                     .block();
