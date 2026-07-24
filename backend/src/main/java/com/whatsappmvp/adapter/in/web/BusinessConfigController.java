@@ -58,7 +58,31 @@ public class BusinessConfigController {
     @PutMapping("/business-hours")
     public ResponseEntity<ApiResponse<List<BusinessHoursEntity>>> updateHours(
             @RequestBody List<BusinessHoursEntity> hours) {
-        List<BusinessHoursEntity> saved = hoursRepository.saveAll(hours);
+        BusinessConfigEntity config = configRepository.findFirstByOrderByCreatedAtAsc()
+            .orElseThrow(() -> new NotFoundException("BusinessConfig not found"));
+
+        List<BusinessHoursEntity> existing = hoursRepository
+            .findByBusinessConfigIdOrderByDayOfWeekAsc(config.getId());
+
+        java.util.Map<Integer, BusinessHoursEntity> existingByDay = new java.util.HashMap<>();
+        for (BusinessHoursEntity e : existing) {
+            existingByDay.put(e.getDayOfWeek().intValue(), e);
+        }
+
+        for (BusinessHoursEntity incoming : hours) {
+            BusinessHoursEntity entity = existingByDay.get(incoming.getDayOfWeek().intValue());
+            if (entity != null) {
+                entity.setOpenTime(incoming.getOpenTime());
+                entity.setCloseTime(incoming.getCloseTime());
+                entity.setIsActive(incoming.getIsActive());
+            } else {
+                incoming.setBusinessConfig(config);
+                hoursRepository.save(incoming);
+            }
+        }
+
+        List<BusinessHoursEntity> saved = hoursRepository
+            .findByBusinessConfigIdOrderByDayOfWeekAsc(config.getId());
         return ResponseEntity.ok(ApiResponse.ok(saved));
     }
 }

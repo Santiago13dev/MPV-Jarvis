@@ -167,7 +167,7 @@ public class MessageProcessingService {
 
         if (content == null || content.isBlank()) return;
 
-        // boolean withinBusinessHours = businessHoursService.isWithinBusinessHours(); // DESHABILITADO PARA PRUEBAS
+        boolean withinBusinessHours = businessHoursService.isWithinBusinessHours();
 
         // ── PASO 6: Mensaje de bienvenida (primer mensaje del día/conversación) ─
         if (isFirstMessage) {
@@ -200,13 +200,12 @@ public class MessageProcessingService {
         }
 
         // ── PASO 8: Fuera de horario → mensaje de aviso ───────────────────────
-        // DESHABILITADO PARA PRUEBAS — permitir AI 24/7
-        // if (!withinBusinessHours) {
-        //     log.info("[Pipeline] Outside business hours — sending off-hours message");
-        //     String offHoursMsg = businessHoursService.getOffHoursMessage();
-        //     sendAndPersistResponse(conversation, remoteJid, offHoursMsg, ProcessedBy.SYSTEM, 0);
-        //     return;
-        // }
+        if (!withinBusinessHours) {
+            log.info("[Pipeline] Outside business hours — sending off-hours message");
+            String offHoursMsg = businessHoursService.getOffHoursMessage();
+            sendAndPersistResponse(conversation, remoteJid, offHoursMsg, ProcessedBy.SYSTEM, 0);
+            return;
+        }
 
         // ── PASO 8.5: Timeout — transferir a humano si pasó demasiado tiempo ──
         if (!isFirstMessage && humanTransferService.isTimeoutTriggered(conversation)) {

@@ -66,7 +66,7 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
       </div>
 
       <!-- Horarios laborales -->
-      <div class="card">
+      <div class="card hours-card">
         <h3>🕐 Horarios Laborales</h3>
         <p class="text-sm text-muted" style="margin-bottom:var(--spacing-md)">
           Fuera de estos horarios el bot enviará el mensaje de "fuera de horario"
@@ -87,12 +87,14 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
             </div>
           </div>
         </div>
-        <button class="btn btn-primary" (click)="saveHours()" [disabled]="savingHours" style="margin-top:var(--spacing-md)">
-          <span *ngIf="savingHours" class="spinner" style="width:16px;height:16px;border-width:2px"></span>
-          💾 Guardar horarios
-        </button>
-        <div class="alert alert-success" *ngIf="savedHours" style="margin-top:var(--spacing-sm)">
-          ✅ Horarios guardados
+        <div class="hours-footer">
+          <button class="btn btn-primary" (click)="saveHours()" [disabled]="savingHours">
+            <span *ngIf="savingHours" class="spinner" style="width:16px;height:16px;border-width:2px"></span>
+            💾 Guardar horarios
+          </button>
+          <div class="alert alert-success" *ngIf="savedHours" style="margin-top:var(--spacing-sm)">
+            ✅ Horarios guardados
+          </div>
         </div>
       </div>
 
@@ -149,6 +151,7 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
     .mini input:checked + .toggle-slider::before { transform: translateX(18px); }
 
     /* Hours */
+    .hours-card { display: flex; flex-direction: column; }
     .hours-list { display: flex; flex-direction: column; gap: var(--spacing-sm); }
     .hours-row {
       display: flex; align-items: center; justify-content: space-between;
@@ -163,6 +166,7 @@ import { BusinessConfig, BusinessHours } from '../../core/models/models';
       &.disabled { opacity: 0.4; pointer-events: none; } }
     .time-input { width: 100px; padding: 6px 10px; font-size: var(--font-size-sm); }
     .time-sep { color: var(--color-text-muted); }
+    .hours-footer { position: sticky; bottom: 0; background: var(--color-bg-card); padding-top: var(--spacing-md); margin-top: auto; }
 
     @media (max-width: 420px) {
       .hours-row { flex-wrap: wrap; }

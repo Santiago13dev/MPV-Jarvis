@@ -1,5 +1,6 @@
 package com.whatsappmvp.infrastructure.persistence.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -22,6 +23,7 @@ public class BusinessHoursEntity {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "business_config_id", nullable = false)
+    @JsonIgnore
     private BusinessConfigEntity businessConfig;
 
     // 0=Dom, 1=Lun, ..., 6=Sab
