@@ -89,7 +89,8 @@ public class MessageProcessingService {
         }
 
         // ── PASO 3: Obtener o crear conversación ──────────────────────────────
-        ConversationEntity conversation = getOrCreateConversation(contact);
+        boolean[] isNewConversation = {false};
+        ConversationEntity conversation = getOrCreateConversation(contact, isNewConversation);
 
         // Actualizar remoteJid si es nuevo o cambió
         if (remoteJid != null && !remoteJid.isBlank()
@@ -98,7 +99,7 @@ public class MessageProcessingService {
             conversationRepository.save(conversation);
         }
 
-        boolean isFirstMessage = conversation.getMessages().isEmpty();
+        boolean isFirstMessage = isNewConversation[0];
 
         // ── PASO 4: Persistir mensaje INBOUND ─────────────────────────────────
         MessageEntity inboundMessage = persistMessage(conversation, waMessageId,
@@ -267,10 +268,11 @@ public class MessageProcessingService {
                 });
     }
 
-    private ConversationEntity getOrCreateConversation(ContactEntity contact) {
+    private ConversationEntity getOrCreateConversation(ContactEntity contact, boolean[] isNewConversation) {
         return conversationRepository.findByContactIdAndIsDeletedFalse(contact.getId())
                 .orElseGet(() -> {
                     log.info("[Pipeline] New conversation for contact: {}", contact.getPhone());
+                    isNewConversation[0] = true;
                     return conversationRepository.save(ConversationEntity.builder()
                             .contact(contact)
                             .status(ConversationStatus.AUTO)
