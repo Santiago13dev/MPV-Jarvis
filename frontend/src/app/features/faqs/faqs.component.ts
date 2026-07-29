@@ -253,6 +253,7 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
     .modal-body {
       display: flex; flex-direction: column; gap: var(--spacing-md);
       overflow-y: auto; flex: 1; min-height: 0;
+      -webkit-overflow-scrolling: touch;
     }
     .modal-footer {
       display: flex; justify-content: flex-end; gap: var(--spacing-sm);
@@ -264,11 +265,14 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
       .modal-overlay { padding: 0; align-items: flex-end; }
       .modal-dialog {
         max-width: none;
-        max-height: 100dvh;
-        max-height: 100vh;
+        height: calc(100dvh - 40px);
+        height: calc(100vh - 40px);
+        max-height: none;
         border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-        padding-bottom: env(safe-area-inset-bottom, 0px);
         animation: slideUp var(--transition-md) ease;
+      }
+      .modal-footer {
+        padding-bottom: env(safe-area-inset-bottom, 16px);
       }
     }
     @keyframes slideUp { from { transform: translateY(24px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
