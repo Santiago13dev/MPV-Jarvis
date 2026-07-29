@@ -242,22 +242,23 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
     .modal-dialog {
       width: 100%; max-width: 580px;
       display: flex; flex-direction: column;
-      max-height: 90vh;
+      max-height: 90vh; overflow: hidden;
     }
     .modal-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding-bottom: var(--spacing-md); border-bottom: 1px solid var(--color-border);
+      padding: var(--spacing-md); border-bottom: 1px solid var(--color-border);
       flex-shrink: 0;
-      h2 { font-size: var(--font-size-xl); font-weight: 700; }
+      h2 { font-size: var(--font-size-xl); font-weight: 700; margin: 0; }
     }
     .modal-body {
       display: flex; flex-direction: column; gap: var(--spacing-md);
+      padding: var(--spacing-md);
       overflow-y: auto; flex: 1; min-height: 0;
       -webkit-overflow-scrolling: touch;
     }
     .modal-footer {
       display: flex; justify-content: flex-end; gap: var(--spacing-sm);
-      padding-top: var(--spacing-md); border-top: 1px solid var(--color-border);
+      padding: var(--spacing-md); border-top: 1px solid var(--color-border);
       flex-shrink: 0;
     }
 
@@ -265,14 +266,9 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
       .modal-overlay { padding: 0; align-items: flex-end; }
       .modal-dialog {
         max-width: none;
-        height: calc(100dvh - 40px);
-        height: calc(100vh - 40px);
-        max-height: none;
+        max-height: 85dvh; max-height: 85vh;
         border-radius: var(--radius-xl) var(--radius-xl) 0 0;
         animation: slideUp var(--transition-md) ease;
-      }
-      .modal-footer {
-        padding-bottom: env(safe-area-inset-bottom, 16px);
       }
     }
     @keyframes slideUp { from { transform: translateY(24px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
