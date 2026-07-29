@@ -241,33 +241,37 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
     }
     .modal-dialog {
       width: 100%; max-width: 580px;
-      display: flex; flex-direction: column; gap: 0;
-      max-height: 90vh; overflow: hidden;
+      display: flex; flex-direction: column;
+      max-height: 90vh;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-bottom: var(--spacing-md); border-bottom: 1px solid var(--color-border);
+      flex-shrink: 0;
+      h2 { font-size: var(--font-size-xl); font-weight: 700; }
+    }
+    .modal-body {
+      display: flex; flex-direction: column; gap: var(--spacing-md);
+      overflow-y: auto; flex: 1; min-height: 0;
+    }
+    .modal-footer {
+      display: flex; justify-content: flex-end; gap: var(--spacing-sm);
+      padding-top: var(--spacing-md); border-top: 1px solid var(--color-border);
+      flex-shrink: 0;
     }
 
     @media (max-width: 640px) {
       .modal-overlay { padding: 0; align-items: flex-end; }
       .modal-dialog {
         max-width: none;
-        max-height: 92dvh;
+        max-height: 100dvh;
+        max-height: 100vh;
         border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-        padding-bottom: calc(var(--spacing-lg) + var(--safe-bottom));
+        padding-bottom: env(safe-area-inset-bottom, 0px);
         animation: slideUp var(--transition-md) ease;
       }
     }
     @keyframes slideUp { from { transform: translateY(24px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
-    .modal-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding-bottom: var(--spacing-md); border-bottom: 1px solid var(--color-border);
-      margin-bottom: var(--spacing-md);
-      h2 { font-size: var(--font-size-xl); font-weight: 700; }
-    }
-    .modal-body { display: flex; flex-direction: column; gap: var(--spacing-md); overflow-y: auto; flex: 1; min-height: 0; }
-    .modal-footer {
-      display: flex; justify-content: flex-end; gap: var(--spacing-sm);
-      padding-top: var(--spacing-md); border-top: 1px solid var(--color-border);
-      margin-top: var(--spacing-md);
-    }
   `]
 })
 export class FaqsComponent implements OnInit {
