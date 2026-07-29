@@ -262,7 +262,7 @@ import { FaqItem, CreateFaqRequest } from '../../core/models/models';
       margin-bottom: var(--spacing-md);
       h2 { font-size: var(--font-size-xl); font-weight: 700; }
     }
-    .modal-body { display: flex; flex-direction: column; gap: var(--spacing-md); overflow-y: auto; }
+    .modal-body { display: flex; flex-direction: column; gap: var(--spacing-md); overflow-y: auto; flex: 1; min-height: 0; }
     .modal-footer {
       display: flex; justify-content: flex-end; gap: var(--spacing-sm);
       padding-top: var(--spacing-md); border-top: 1px solid var(--color-border);
