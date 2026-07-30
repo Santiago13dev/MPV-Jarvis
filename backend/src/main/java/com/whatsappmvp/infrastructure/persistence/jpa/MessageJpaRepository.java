@@ -20,6 +20,8 @@ public interface MessageJpaRepository extends JpaRepository<MessageEntity, UUID>
 
     Optional<MessageEntity> findByWaMessageId(String waMessageId);
 
+    boolean existsByWaMessageId(String waMessageId);
+
     @Query("SELECT COUNT(m) FROM MessageEntity m WHERE DATE(m.sentAt) = :date AND m.direction = 'INBOUND'")
     long countInboundByDate(@Param("date") LocalDate date);
 

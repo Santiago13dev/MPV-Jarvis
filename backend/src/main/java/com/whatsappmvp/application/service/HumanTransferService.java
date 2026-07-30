@@ -33,11 +33,14 @@ public class HumanTransferService {
     private final OpenAIServiceClient openAIClient;
     private final WhatsAppServiceClient whatsAppClient;
 
-    // Keywords que触发 transferencia inmediata
+    // Keywords que trigger transferencia inmediata
+    // NOTA: "persona" y "humano" se eliminaron porque causan falsos positivos
+    // con mensajes como "somos 30 personas". Ya están cubiertos por
+    // "hablar con una persona" y "hablar con un humano".
     private static final List<String> TRANSFER_KEYWORDS = List.of(
             "hablar con alguien", "hablar con una persona", "hablar con un humano",
             "quiero un asesor", "necesito un asesor", "puedo hablar con un asesor",
-            "persona", "humano", "dueño", "encargado", "gerente",
+            "dueño", "encargado", "gerente",
             "queja", "reclamo", "problema grave", "esto es una basura",
             "quiero mi dinero", "reembolso", "estaf", "estafa",
             "hablar con alguien ya", "atención humana"

@@ -80,6 +80,14 @@ public class MessageProcessingService {
             return;
         }
 
+        // ── PASO 1.5: Deduplicar mensajes (WhatsApp reenvía los mismos) ────
+        if (waMessageId != null && !waMessageId.isBlank()) {
+            if (messageRepository.existsByWaMessageId(waMessageId)) {
+                log.info("[Pipeline] Duplicate message {} — ignoring", waMessageId);
+                return;
+            }
+        }
+
         // ── PASO 2: Obtener o crear contacto ──────────────────────────────────
         ContactEntity contact = getOrCreateContact(phone, displayName);
 
@@ -134,9 +142,9 @@ public class MessageProcessingService {
         }
 
         // ── PASO 5.5: Reservar — iniciar flujo SIEMPRE (antes de FAQs) ───────
-        if (normalizedContent.equals("reservar") || normalizedContent.equals("reserva")) {
+        if (isReservationIntent(normalizedContent)) {
             log.info("[Pipeline] RESERVATION trigger → starting reservation flow");
-            String resMsg = reservationFlowService.startFlow(conversation);
+            String resMsg = reservationFlowService.startFlow(conversation, content, displayName);
             sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0);
             return;
         }
@@ -347,5 +355,23 @@ public class MessageProcessingService {
                 "unreadCount", conv.getUnreadCount(),
                 "lastMessageAt", conv.getLastMessageAt() != null ? conv.getLastMessageAt().toString() : ""
         );
+    }
+
+    /**
+     * Detecta intención de reserva en mensajes naturales.
+     * Busca palabras clave como "reserva", "reservar", "apartar", "agendar"
+     * pero excluye mensajes de cancelación.
+     */
+    private boolean isReservationIntent(String normalizedContent) {
+        if (normalizedContent == null || normalizedContent.isBlank()) return false;
+        // Excluir cancelaciones (ya manejado en paso 5.4)
+        if (normalizedContent.contains("cancelar")) return false;
+        // Detectar intención de reserva
+        return normalizedContent.contains("reserva") ||
+               normalizedContent.contains("reservar") ||
+               normalizedContent.contains("reservacion") ||
+               normalizedContent.contains("reservación") ||
+               normalizedContent.contains("apartar") ||
+               normalizedContent.contains("agendar");
     }
 }
