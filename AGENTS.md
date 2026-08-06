@@ -142,6 +142,42 @@ docker logs wamvp_whatsapp --tail 20
 
 ---
 
+## Production Deployment (VPS Hostinger)
+
+### Scripts disponibles (`scripts/`)
+
+| Script | Descripción |
+|--------|-------------|
+| `backup-db.sh` | Crea backup de PostgreSQL antes de cada despliegue |
+| `deploy.sh` | Despliegue seguro: backup → git pull → rebuild → restart |
+| `restore-db.sh` | Restaura base de datos desde backup |
+
+### Despliegue en VPS
+
+```bash
+# Primera vez: clonar, configurar .env, dar permisos
+cp .env.example .env && nano .env
+chmod +x scripts/*.sh
+
+# Desplegar (automático con backup)
+bash scripts/deploy.sh
+```
+
+### Archivos de producción
+
+- `docker-compose.prod.yml` — Configuración separada para VPS
+- `.env.example` — Template de variables de entorno
+
+### ⚠️ Reglas críticas
+
+1. **NUNCA** ejecutar `docker compose down -v` (borra volúmenes y datos)
+2. **SIEMPRE** ejecutar `backup-db.sh` antes de desplegar
+3. Los volúmenes PostgreSQL (`postgres_data`) persisten FAQs y configuración
+4. Flyway ejecuta migraciones automáticamente al iniciar backend
+5. Para restaurar: `bash scripts/restore-db.sh`
+
+---
+
 ## Pending / Future Work
 
 - [ ] Verify reservation flow end-to-end (test "reservar" → "SI" → data)

@@ -1,16 +1,18 @@
 package com.whatsappmvp.application.service;
 
-import com.whatsappmvp.infrastructure.persistence.entity.BusinessConfigEntity;
 import com.whatsappmvp.infrastructure.persistence.entity.MessageEntity;
-import com.whatsappmvp.infrastructure.persistence.jpa.BusinessConfigJpaRepository;
 import com.whatsappmvp.infrastructure.persistence.jpa.MessageJpaRepository;
 import com.whatsappmvp.infrastructure.client.OpenAIServiceClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,8 +32,8 @@ import java.util.UUID;
 public class AIService {
 
     private final OpenAIServiceClient openAIClient;
-    private final BusinessConfigJpaRepository configRepository;
     private final MessageJpaRepository messageRepository;
+    private final ResourceLoader resourceLoader;
 
     // Máximo de mensajes históricos a incluir como contexto
     private static final int MAX_HISTORY_MESSAGES = 6;
@@ -53,47 +55,17 @@ public class AIService {
     }
 
     /**
-     * Construye el system prompt dinámicamente desde la configuración del negocio.
-     *
-     * El prompt incluye:
-     * - Nombre y tipo del negocio
-     * - Rol del asistente
-     * - Instrucciones de comportamiento
-     * - Limitaciones (no inventar precios, escalar si no sabe)
+     * Construye el system prompt leyendo desde el archivo system-prompt.txt.
+     * Si hay error de lectura, usa el prompt por defecto.
      */
     private String buildSystemPrompt() {
-        BusinessConfigEntity config = configRepository.findFirstByOrderByCreatedAtAsc()
-                .orElse(null);
-
-        if (config == null) {
+        try {
+            Resource resource = resourceLoader.getResource("classpath:system-prompt.txt");
+            return resource.getContentAsString(StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.error("[AI] Error reading system-prompt.txt, using default prompt", e);
             return getDefaultPrompt();
         }
-
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("Eres el asistente virtual de ").append(config.getBusinessName()).append(".\n");
-
-        if (config.getBusinessType() != null && !config.getBusinessType().isBlank()) {
-            prompt.append("El negocio es: ").append(config.getBusinessType()).append(".\n");
-        }
-
-        prompt.append("\n## TU ROL\n");
-        prompt.append("Ayudas a los clientes respondiendo sus preguntas de manera amable, ");
-        prompt.append("clara y profesional. Representas la imagen del negocio.\n");
-
-        prompt.append("\n## REGLAS IMPORTANTES\n");
-        prompt.append("1. Responde SIEMPRE en español a menos que el cliente escriba en otro idioma.\n");
-        prompt.append("2. Sé amable, empático y usa emojis ocasionalmente para un tono cálido. 😊\n");
-        prompt.append("3. Si no sabes la respuesta con certeza, di: 'Para darte información más precisa, ");
-        prompt.append("voy a conectarte con un asesor.' NO inventes información.\n");
-        prompt.append("4. No compartas información de competidores.\n");
-        prompt.append("5. Mantén las respuestas concisas (máximo 3-4 párrafos).\n");
-        prompt.append("6. Si el cliente está molesto o el tema es delicado, deriva a un asesor humano.\n");
-
-        prompt.append("\n## INFORMACIÓN DEL NEGOCIO\n");
-        // Aquí se puede expandir con más campos de la DB (servicios, precios, etc.)
-        // cuando implementemos el BotPrompts con texto configurable completo
-
-        return prompt.toString();
     }
 
     /**
