@@ -98,7 +98,7 @@ docker logs wamvp_whatsapp --tail 20
 ### Key Tables
 - `conversations` → now has `pending_action` (VARCHAR 50) and `pending_action_data` (TEXT/JSON)
 - `reservations` → `customer_name`, `phone_number`, `reservation_date`, `amount`, `status` (PENDIENTE/CONFIRMADA/CANCELADA), `notes`, `conversation_id`
-- `faq_items` → seeded via `backend/scripts/seed-faqs.js` (reservation FAQs with keywords: reservar, reserva, mesa, cita, apartar)
+- `faq_items` → 73 items configured via admin API (reservation FAQs with keywords: reservar, reserva, mesa, cita, apartar)
 - `keyword_rules` → empty by default, created via admin API
 
 ---
@@ -178,10 +178,13 @@ bash scripts/deploy.sh
 ### ⚠️ Reglas críticas
 
 1. **NUNCA** ejecutar `docker compose down -v` (borra volúmenes y datos)
-2. **SIEMPRE** ejecutar `backup-db.sh` antes de desplegar
-3. Los volúmenes PostgreSQL (`postgres_data`) persisten FAQs y configuración
-4. Flyway ejecuta migraciones automáticamente al iniciar backend
-5. Para restaurar: `bash scripts/restore-db.sh`
+2. **NUNCA** ejecutar `docker compose -f docker-compose.prod.yml down -v`
+3. **SIEMPRE** ejecutar `backup-db.sh` antes de desplegar
+4. Los volúmenes PostgreSQL (`wamvp_postgres_data`) persisten FAQs y configuración
+5. Flyway ejecuta migraciones automáticamente al iniciar backend (NO borra datos existentes)
+6. Para restaurar: `bash scripts/restore-db.sh`
+7. `docker compose down` es SEGURO (mantiene volúmenes) — solo `-v` borra datos
+8. Siempre usar `docker-compose.prod.yml` en VPS (no el `docker-compose.yml` de dev)
 
 ---
 
