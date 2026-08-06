@@ -314,7 +314,7 @@ public class MessageProcessingService {
 
         // Delay humano antes de responder (evita detección de spam por Meta)
         try {
-            Thread.sleep(3000);
+            Thread.sleep(5000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
