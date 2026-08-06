@@ -13,6 +13,8 @@ Angular (4200) → Nginx (80) → Spring Boot (8080) → PostgreSQL (5432)
 - **Docker volume**: `wa_sessions:/app/sessions` (persists WhatsApp credentials)
 - **Bot phone number**: `573123197433`
 - **Client phone**: `48301856550957` (Santiago, sends from WhatsApp Web → produces `remoteJid: 48301856550957@lid`)
+- **VPS**: Hostinger, path `/opt/MPV-Jarvis`
+- **Repository**: `https://github.com/Santiago13dev/MPV-Jarvis`
 
 ---
 
@@ -89,6 +91,9 @@ docker logs wamvp_whatsapp --tail 20
 - `V2__seed_data.sql` — roles, business_config, business_hours, 3 generic FAQ items
 - `V3__add_reservations.sql` — reservations table
 - `V4__add_pending_action_to_conversations.sql` — `pending_action`, `pending_action_data` columns on conversations
+- `V5__add_remote_jid_to_conversations.sql` — `remote_jid` column for @lid JID support
+- `V6__add_is_deleted_to_conversations.sql` — soft delete support
+- `V7__add_admin_phone_to_business_config.sql` — `admin_phone` column
 
 ### Key Tables
 - `conversations` → now has `pending_action` (VARCHAR 50) and `pending_action_data` (TEXT/JSON)
@@ -112,6 +117,7 @@ docker logs wamvp_whatsapp --tail 20
 - `backend/src/main/java/com/whatsappmvp/application/service/BusinessHoursService.java` — `isWithinBusinessHours()` checks DB `business_hours` by day-of-week
 - `backend/src/main/java/com/whatsappmvp/application/service/FaqMatchingService.java` — Keyword/phrase matching
 - `backend/src/main/java/com/whatsappmvp/application/service/KeywordMatchingService.java` — Matches against `keyword_rules` table
+- `backend/src/main/java/com/whatsappmvp/application/service/AIService.java` — Reads system-prompt.txt from classpath
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/WebhookController.java` — Receives messages from Node.js, passes `remoteJid`
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/WhatsappSessionController.java` — `POST /api/whatsapp/reset`
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/ReservationController.java` — CRUD REST API `/api/reservations`
@@ -120,6 +126,7 @@ docker logs wamvp_whatsapp --tail 20
 - `backend/src/main/java/com/whatsappmvp/infrastructure/client/WhatsAppServiceClient.java` — `.block()` instead of `.subscribe()`
 - `backend/src/main/java/com/whatsappmvp/infrastructure/persistence/entity/ConversationEntity.java` — Has `pendingAction`, `pendingActionData`
 - `backend/src/main/java/com/whatsappmvp/infrastructure/persistence/entity/ReservationEntity.java` — Reservation model
+- `backend/src/main/resources/system-prompt.txt` — System prompt for "La Montaña del Bendito Chicharrón"
 - `backend/src/main/resources/db/migration/V4__add_pending_action_to_conversations.sql` — Latest migration
 
 ### Angular Frontend
@@ -186,3 +193,24 @@ bash scripts/deploy.sh
 - [ ] Rate limit tuning
 - [ ] Multi-language support
 - [ ] Image/document handling beyond auto-response
+
+---
+
+## Restaurant Info: "La Montaña del Bendito Chicharrón"
+
+- **Type**: Restaurante colombiano, chicharrón y comida tradicional
+- **Horario**: Sábados y domingos 11:30 AM hasta agotar existencias + lunes festivos
+- **Reservas**: Horarios sugeridos 11:10 AM, 12:00 PM, 12:30 PM, 1:00 PM
+- **Datos para reserva**: Nombre, fecha, personas, motivo, homenajeado, hora
+- **Decoración**: $40.000 COP
+- **Tiempo máximo de espera**: 15 min (después sujeto a disponibilidad)
+- **Política cancelación**: No hay devolución, dinero queda para otra fecha
+- **Pagos**: Nequi, efectivo, transferencia, Llave
+- **Domicilios**: NO
+- **Pet Friendly**: Sí (traer bolsa para residuos)
+- **WiFi**: NO
+- **Factura electrónica**: Sí
+- **Capacidad**: 112 mesas
+- **Música**: Ocasionalmente en vivo los domingos
+- **System prompt**: `backend/src/main/resources/system-prompt.txt` (AIService reads from classpath)
+- **IA**: Groq API (llama3-8b-8192) — solo como fallback cuando FAQ/keywords no matchean
