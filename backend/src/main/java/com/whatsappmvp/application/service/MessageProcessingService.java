@@ -312,6 +312,13 @@ public class MessageProcessingService {
                 ? remoteJid
                 : conversation.getContact().getPhone() + "@s.whatsapp.net";
 
+        // Delay humano antes de responder (evita detección de spam por Meta)
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
         // Enviar vía WhatsApp Service
         boolean sent = false;
         try {
