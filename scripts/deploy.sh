@@ -1,9 +1,12 @@
 #!/bin/bash
 # ============================================================
 # Despliegue seguro — NO borra volúmenes ni datos
+# USO: bash scripts/deploy.sh
 # ============================================================
 
 set -e
+
+COMPOSE_FILE="docker-compose.prod.yml"
 
 echo "🚀 Iniciando despliegue seguro..."
 
@@ -17,17 +20,17 @@ if [ -d ".git" ]; then
     git pull origin main || git pull origin master
 fi
 
-# 3. Reconstruir solo los contenedores que cambiaron
+# 3. Reconstruir contenedores
 echo "🔨 Paso 3: Reconstruyendo contenedores..."
-docker compose build
+docker compose -f "$COMPOSE_FILE" build
 
 # 4. Detener contenedores viejos (NO borra volúmenes)
 echo "⏹️  Paso 4: Deteniendo contenedores anteriores..."
-docker compose stop
+docker compose -f "$COMPOSE_FILE" stop
 
 # 5. Levantar contenedores nuevos
 echo "▶️  Paso 5: Iniciando nuevos contenedores..."
-docker compose up -d
+docker compose -f "$COMPOSE_FILE" up -d
 
 # 6. Esperar a que PostgreSQL esté listo
 echo "⏳ Paso 6: Esperando a que PostgreSQL esté listo..."
@@ -35,7 +38,7 @@ sleep 10
 
 # 7. Verificar que los contenedores estén corriendo
 echo "🔍 Paso 7: Verificando estado..."
-docker compose ps
+docker compose -f "$COMPOSE_FILE" ps
 
 echo ""
 echo "✅ Despliegue completado exitosamente!"

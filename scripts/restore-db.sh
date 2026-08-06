@@ -7,6 +7,7 @@ set -e
 
 BACKUP_DIR="/root/backups/whatsapp-mvp"
 CONTAINER_NAME="wamvp_postgres"
+COMPOSE_FILE="docker-compose.prod.yml"
 
 # Listar backups disponibles
 echo "📋 Backups disponibles:"

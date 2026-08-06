@@ -16,6 +16,12 @@ echo "📦 Iniciando backup de base de datos..."
 # Crear directorio de backups si no existe
 mkdir -p "$BACKUP_DIR"
 
+# Verificar que el contenedor esté corriendo
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    echo "❌ Error: El contenedor ${CONTAINER_NAME} no está corriendo"
+    exit 1
+fi
+
 # Ejecutar backup
 docker exec "$CONTAINER_NAME" pg_dump -U wamvp_user whatsapp_mvp > "$BACKUP_FILE"
 
