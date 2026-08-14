@@ -4,6 +4,7 @@ import com.whatsappmvp.domain.enums.ConversationStatus;
 import com.whatsappmvp.domain.enums.MessageDirection;
 import com.whatsappmvp.domain.enums.MessageType;
 import com.whatsappmvp.domain.enums.ProcessedBy;
+import com.whatsappmvp.config.AppProperties;
 import com.whatsappmvp.infrastructure.client.OpenAIServiceClient;
 import com.whatsappmvp.infrastructure.client.WhatsAppServiceClient;
 import com.whatsappmvp.infrastructure.persistence.entity.*;
@@ -50,6 +51,7 @@ public class MessageProcessingService {
     private final WhatsAppServiceClient whatsAppClient;
     private final WebSocketEventPublisher wsPublisher;
     private final HumanTransferService humanTransferService;
+    private final AppProperties props;
 
     private final ContactJpaRepository contactRepository;
     private final ConversationJpaRepository conversationRepository;
@@ -160,6 +162,13 @@ public class MessageProcessingService {
             // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
         }
 
+        // ── PASO 5.65: Solicitud de menú — enviar PDF ─────────────────────────
+        if (isMenuRequest(normalizedContent)) {
+            log.info("[Pipeline] MENU request → sending PDF");
+            sendMenuPdf(conversation, remoteJid);
+            return;
+        }
+
         // ── PASO 5.7: Transferencia a humano (keywords) ──────────────────────
         if (humanTransferService.hasTransferKeyword(normalizedContent)) {
             log.info("[Pipeline] HUMAN TRANSFER keyword detected → transferring to human");
@@ -186,6 +195,9 @@ public class MessageProcessingService {
             // Enviar ubicación del restaurante
             sendLocation(remoteJid, conversation,
                     4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
+
+            // Enviar menú del restaurante
+            sendMenuPdf(conversation, remoteJid);
         }
 
         // ── PASO 7: MOTOR HÍBRIDO ─────────────────────────────────────────────
@@ -380,5 +392,53 @@ public class MessageProcessingService {
                normalizedContent.contains("reservación") ||
                normalizedContent.contains("apartar") ||
                normalizedContent.contains("agendar");
+    }
+
+    /**
+     * Detecta si el usuario quiere ver el menú/cart del restaurante.
+     */
+    private boolean isMenuRequest(String normalizedContent) {
+        if (normalizedContent == null || normalizedContent.isBlank()) return false;
+        return normalizedContent.contains("menu") ||
+               normalizedContent.contains("menú") ||
+               normalizedContent.contains("carta") ||
+               normalizedContent.contains("platos") ||
+               normalizedContent.contains("qué tienen") ||
+               normalizedContent.contains("que tienen") ||
+               normalizedContent.contains("qué sirven") ||
+               normalizedContent.contains("que sirven") ||
+               normalizedContent.contains("comida") ||
+               normalizedContent.contains("comida hay") ||
+               normalizedContent.contains("qué venden") ||
+               normalizedContent.contains("que venden");
+    }
+
+    /**
+     * Envía el PDF del menú al usuario.
+     * El PDF está en static resources: /menu-bendito-chicharron.pdf
+     */
+    private void sendMenuPdf(ConversationEntity conversation, String remoteJid) {
+        String targetJid = remoteJid != null && !remoteJid.isBlank()
+                ? remoteJid
+                : conversation.getContact().getPhone() + "@s.whatsapp.net";
+
+        // Texto introductorio antes del PDF
+        String introMessage = "📋 ¡Claro! Aquí tienes nuestro menú completo. 🍽️";
+        sendAndPersistResponse(conversation, remoteJid, introMessage, ProcessedBy.SYSTEM, 0);
+
+        // Construir URL del PDF
+        String pdfUrl = props.getUploads().getBaseUrl().replace("/uploads", "")
+                + "/menu-bendito-chicharron.pdf";
+
+        try {
+            whatsAppClient.sendDocument(targetJid, pdfUrl, "Menu-Bendito-Chicharron.pdf", "application/pdf");
+            log.info("[Pipeline] Menu PDF sent to {}", targetJid);
+        } catch (Exception e) {
+            log.error("[Pipeline] Failed to send menu PDF to {}: {}", targetJid, e.getMessage());
+            // Fallback: enviar mensaje de texto indicando que hay menú
+            String fallbackMsg = "Disculpa, no pude enviar el menú en este momento. " +
+                    "¿Puedes preguntar por horarios, precios o reservaciones? 😊";
+            sendAndPersistResponse(conversation, remoteJid, fallbackMsg, ProcessedBy.SYSTEM, 0);
+        }
     }
 }
