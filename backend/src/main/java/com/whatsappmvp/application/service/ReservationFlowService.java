@@ -130,7 +130,8 @@ public class ReservationFlowService {
         boolean hasMotive = parsed.motive != null;
 
         if (hasName && hasDate && hasPeople) {
-            return createReservationFromData(conversation, conversation.getContact().getPhone());
+            return createReservationFromData(conversation, conversation.getContact().getPhone())
+                .orElse("Reserva creada exitosamente.");
         }
 
         if (hasDate || hasPeople || hasMotive || hasTime) {
