@@ -28,7 +28,7 @@ public class RateLimitService {
     private final Map<String, RateLimitEntry> windowMap = new ConcurrentHashMap<>();
 
     // Límites por defecto (se sobreescriben con config)
-    private static final int DEFAULT_MAX_MESSAGES = 10;
+    private static final int DEFAULT_MAX_MESSAGES = 30;
     private static final int DEFAULT_WINDOW_MINUTES = 5;
 
     /**

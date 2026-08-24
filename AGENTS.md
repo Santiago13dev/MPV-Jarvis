@@ -33,7 +33,7 @@ Pipeline order:
 3. Get/create conversation
 4. Persist inbound message
 5. HUMAN_TAKEOVER check → skip automation
-6. **5.5**: "reservar"/"reserva" → starts reservation flow (BEFORE FAQs)
+6. **5.5**: "reservar"/"reserva" + context patterns → starts reservation flow (BEFORE FAQs)
 7. **5.6**: Pending action check → handles reservation step (BEFORE FAQs)
 8. Text-only filter (images → human)
 9. Welcome message (first message)
@@ -51,12 +51,19 @@ Key: FAQs and keywords work **24/7** (before business hours check). Only AI and 
 
 ### Reservation Flow (ReservationFlowService.java)
 Flow:
-1. Client: "reservar" → Bot: "¿Deseas hacer una reserva? Responde SI o NO"
-2. Client: "SI" → Bot: asks for data (nombre, fecha, personas, motivo, homenajeado, hora)
-3. Client: sends data → Bot: parses and creates reservation as CONFIRMADA
-4. Client: "NO" → Bot: "¡Perfecto! Si necesitas algo más, estoy aquí."
+1. Client: "reservar" or natural intent → Bot parses all available data
+2. If data complete → Creates reservation directly (no SI/NO needed)
+3. If data incomplete → Shows detected data + asks for missing fields
+4. Client: sends data → Bot parses and adds to context
+5. When all required data collected → Creates reservation as CONFIRMADA
+6. Client: "NO" → Bot: "¡Perfecto! Si necesitas algo más, estoy aquí."
 
-State tracked via `conversations.pending_action` and `conversations.pending_action_data` (JSON).
+State tracked via `conversations.pending_action` = `RESERVATION_COLLECTING` and `conversations.pending_action_data` (JSON).
+
+Detection patterns (isReservationIntent):
+- Direct: reservar, reserva, apartar, agendar
+- Contextual: "quiero hacer" + mesa/cita/reunión, "necesito" + mesa/lugar, "llevar" + torta/pastel
+- Combined: "para X personas" + sábado/fecha
 
 ### Angular Budget Fix
 - `angular.json` → `anyComponentStyle: maxError` increased from `4kb` to `8kb` (pre-existing build error)
@@ -112,7 +119,7 @@ docker logs wamvp_whatsapp --tail 20
 
 ### Spring Boot Backend
 - `backend/src/main/java/com/whatsappmvp/application/service/MessageProcessingService.java` — Core pipeline
-- `backend/src/main/java/com/whatsappmvp/application/service/ReservationFlowService.java` — Multi-step reservation conversation state machine
+- `backend/src/main/java/com/whatsappmvp/application/service/ReservationFlowService.java` — Multi-step reservation conversation state machine (unified ACTION_COLLECTING state)
 - `backend/src/main/java/com/whatsappmvp/application/service/ReservationService.java` — CRUD for reservations
 - `backend/src/main/java/com/whatsappmvp/application/service/BusinessHoursService.java` — `isWithinBusinessHours()` checks DB `business_hours` by day-of-week
 - `backend/src/main/java/com/whatsappmvp/application/service/FaqMatchingService.java` — Keyword/phrase matching
@@ -146,6 +153,7 @@ docker logs wamvp_whatsapp --tail 20
 | @lid JID not handled | Sending to `@s.whatsapp.net` instead of `@lid` | Use `remoteJid` directly for send-back |
 | Angular build error | `anyComponentStyle` budget too low | Increased to `8kb` |
 | Reservation created without user input | Hardcoded at "reservar" keyword, dead code (FAQ caught it first) | New `ReservationFlowService` with SI/NO flow |
+| Bot stuck asking SI/NO for reservations | 3 separate states (ASK_CONFIRMATION, CONFIRM_PARSED, COLLECT_MISSING) only accepted SI/NO | Unified ACTION_COLLECTING state that parses data from any message |
 
 ---
 
@@ -180,11 +188,28 @@ bash scripts/deploy.sh
 1. **NUNCA** ejecutar `docker compose down -v` (borra volúmenes y datos)
 2. **NUNCA** ejecutar `docker compose -f docker-compose.prod.yml down -v`
 3. **SIEMPRE** ejecutar `backup-db.sh` antes de desplegar
-4. Los volúmenes PostgreSQL (`wamvp_postgres_data`) persisten FAQs y configuración
+4. Los volúmenes PostgreSQL (`wamvp_postgres_data`) persisten FAQs, reservas y configuración
 5. Flyway ejecuta migraciones automáticamente al iniciar backend (NO borra datos existentes)
 6. Para restaurar: `bash scripts/restore-db.sh`
 7. `docker compose down` es SEGURO (mantiene volúmenes) — solo `-v` borra datos
 8. Siempre usar `docker-compose.prod.yml` en VPS (no el `docker-compose.yml` de dev)
+9. **Para reiniciar containers en VPS**: usar `docker compose -f docker-compose.prod.yml restart` (NUNCA `down -v`)
+10. Si se necesita un rebuild completo en VPS, usar `deploy.sh` que hace backup automático antes
+
+### ⛔ Incidente conocido: `docker compose down -v` borró la BD
+
+Ejecutar `docker compose down -v` (con la flag `-v`) **borra el volumen `wamvp_postgres_data`** incluyendo todas las FAQs (73 items), reservas, configuración del negocio, y datos de contactos/conversaciones. Esto ya ha ocurrido en un rebuild anterior.
+
+**Causa raíz**: La flag `-v` en `docker compose down` elimina volúmenes nombrados. Los cambios de CSS o frontend no tienen relación — el problema fue el uso de `-v` en un rebuild del backend.
+
+**Prevención**: Siempre usar `restart` en vez de `down -v`:
+```bash
+# ✅ SEGURO — reinicia sin borrar datos
+docker compose -f docker-compose.prod.yml restart
+
+# ❌ PELIGROSO — borra toda la BD
+docker compose -f docker-compose.prod.yml down -v
+```
 
 ---
 

@@ -378,20 +378,64 @@ public class MessageProcessingService {
 
     /**
      * Detecta intención de reserva en mensajes naturales.
-     * Busca palabras clave como "reserva", "reservar", "apartar", "agendar"
-     * pero excluye mensajes de cancelación.
+     * Busca palabras clave directas y patrones contextuales.
      */
     private boolean isReservationIntent(String normalizedContent) {
         if (normalizedContent == null || normalizedContent.isBlank()) return false;
         // Excluir cancelaciones (ya manejado en paso 5.4)
         if (normalizedContent.contains("cancelar")) return false;
-        // Detectar intención de reserva
-        return normalizedContent.contains("reserva") ||
-               normalizedContent.contains("reservar") ||
-               normalizedContent.contains("reservacion") ||
-               normalizedContent.contains("reservación") ||
-               normalizedContent.contains("apartar") ||
-               normalizedContent.contains("agendar");
+
+        // Palabras clave directas de reserva
+        if (normalizedContent.contains("reserva") ||
+            normalizedContent.contains("reservar") ||
+            normalizedContent.contains("reservacion") ||
+            normalizedContent.contains("reservación") ||
+            normalizedContent.contains("apartar") ||
+            normalizedContent.contains("agendar")) {
+            return true;
+        }
+
+        // Patrones contextuales: intención de hacer reserva sin decir "reservar"
+        if (normalizedContent.contains("quiero hacer") &&
+            (normalizedContent.contains("mesa") || normalizedContent.contains("cita") ||
+             normalizedContent.contains("reunion") || normalizedContent.contains("reunión"))) {
+            return true;
+        }
+
+        if (normalizedContent.contains("necesito") &&
+            (normalizedContent.contains("mesa") || normalizedContent.contains("lugar") ||
+             normalizedContent.contains("espacio"))) {
+            return true;
+        }
+
+        if (normalizedContent.contains("me gustaría") || normalizedContent.contains("me gustaria")) {
+            if (normalizedContent.contains("reservar") || normalizedContent.contains("apartar") ||
+                normalizedContent.contains("mesa")) {
+                return true;
+            }
+        }
+
+        // Detectar mensajes con datos de reserva pero sin palabra clave explícita
+        // "para X personas" + (sábado/fecha) = reserva
+        boolean hasPeopleCount = normalizedContent.contains("personas") ||
+                                 normalizedContent.matches(".*para\\s+\\d+.*");
+        boolean hasDateReference = normalizedContent.contains("sabado") ||
+                                   normalizedContent.contains("sábado") ||
+                                   normalizedContent.contains("mañana") ||
+                                   normalizedContent.contains("manana") ||
+                                   normalizedContent.matches(".*\\d{1,2}[/\\-]\\d{1,2}[/\\-]\\d{4}.*");
+
+        if (hasPeopleCount && hasDateReference) {
+            return true;
+        }
+
+        // "llevar" + (torta/pastel) = cumpleaños = reserva
+        if (normalizedContent.contains("llevar") &&
+            (normalizedContent.contains("torta") || normalizedContent.contains("pastel"))) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
