@@ -119,13 +119,11 @@ async function connect() {
 
         logger.warn({ statusCode }, '[WA] Connection closed');
 
-        // 401 = Logged Out — usuario cerró sesión desde el teléfono
+        // 401 = Logged Out — credenciales inválidas, NO reintentar automáticamente
         if (statusCode === DisconnectReason.loggedOut) {
-          // Después de un reset, puede llegar 401 temporalmente — reintentar con cooldown largo
           await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
-          logger.warn('[WA] Session logged out — retrying in 60s');
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 60_000);
+          logger.error('[WA] Session logged out (401) — manual reset required. POST /session/reset');
+          // NO hacer retry automático — cada reintento mantiene el bloqueo de WhatsApp
           return;
         }
 
