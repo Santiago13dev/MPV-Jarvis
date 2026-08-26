@@ -32,6 +32,11 @@ let sessionStatus = 'DISCONNECTED'; // DISCONNECTED | CONNECTING | QR_READY | CO
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 
+// ── Límites para evitar loops infinitos de reconexión ─────────────────────────
+const MAX_CONFLICT_RETRIES = 5;      // Max intentos de 440 antes de cooldown largo
+const CONFLICT_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutos de cooldown
+let conflictRetries = 0;
+
 // ── Getters públicos ────────────────────────────────────────────────────────────
 const getStatus = () => sessionStatus;
 const getQR = () => qrBase64;
@@ -102,6 +107,7 @@ async function connect() {
       if (connection === 'open') {
         qrBase64 = null;
         reconnectAttempts = 0;
+        conflictRetries = 0;
         const phoneNumber = sock.user?.id?.split(':')[0] || 'unknown';
         await setStatus('CONNECTED', { phoneNumber });
         logger.info({ phoneNumber }, '[WA] Connected successfully');
@@ -115,8 +121,11 @@ async function connect() {
 
         // 401 = Logged Out — usuario cerró sesión desde el teléfono
         if (statusCode === DisconnectReason.loggedOut) {
+          // Después de un reset, puede llegar 401 temporalmente — reintentar con cooldown largo
           await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
-          logger.info('[WA] Session logged out — credentials cleared');
+          logger.warn('[WA] Session logged out — retrying in 60s');
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 60_000);
           return;
         }
 
@@ -129,9 +138,31 @@ async function connect() {
 
         // 440 = Connection Replaced — otro dispositivo se conectó
         if (statusCode === 440) {
-          logger.warn('[WA] Connection replaced by another device — waiting 30s');
+          conflictRetries++;
+          if (conflictRetries >= MAX_CONFLICT_RETRIES) {
+            // Demasiados conflictos — cooldown largo para evitar loop infinito
+            logger.error({ conflictRetries }, '[WA] Too many conflicts — entering 10 min cooldown');
+            await setStatus('ERROR', { error: 'Conflict loop — cooling down 10 min' });
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(() => {
+              conflictRetries = 0;
+              connect();
+            }, CONFLICT_COOLDOWN_MS);
+            return;
+          }
+          const delay = Math.min(30_000 * conflictRetries, 120_000); // 30s, 60s, 90s, 120s max
+          logger.warn({ conflictRetries, delayMs: delay }, '[WA] Connection replaced — waiting before retry');
           if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 30_000);
+          reconnectTimer = setTimeout(connect, delay);
+          return;
+        }
+
+        // 515 = WhatsApp server dropped connection (rate limit / anti-spam)
+        if (statusCode === 515) {
+          logger.error('[WA] Server dropped connection (515) — cooldown 5 min');
+          await setStatus('ERROR', { error: 'Server rate limit (515) — cooling down' });
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 5 * 60 * 1000);
           return;
         }
 
@@ -233,6 +264,7 @@ async function resetSession() {
   try {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectAttempts = 0;
+    conflictRetries = 0;
 
     // Cerrar socket actual si existe
     if (sock) {
@@ -249,9 +281,10 @@ async function resetSession() {
 
     qrBase64 = null;
     await setStatus('DISCONNECTED', { reason: 'RESET' });
-    logger.info('[WA] Session reset — reconnecting fresh');
+    logger.info('[WA] Session reset — waiting 5s before fresh connect');
 
-    // Reconexión inmediata con sesión limpia
+    // Esperar 5s antes de reconectar para dar tiempo a WhatsApp a limpiar estado
+    await new Promise(r => setTimeout(r, 5000));
     await connect();
   } catch (err) {
     logger.error({ err }, '[WA] Error during resetSession');
