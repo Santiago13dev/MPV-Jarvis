@@ -70,21 +70,23 @@ Detection patterns (isReservationIntent):
 
 ---
 
-## Rebuild Commands
+## Rebuild Commands (VPS)
 
-```powershell
+```bash
 # Backend rebuild
-docker compose build --no-cache backend; if ($?) { docker compose up -d backend }
+docker compose -f docker-compose.prod.yml build --no-cache backend
+docker compose -f docker-compose.prod.yml up -d backend
 
 # WhatsApp service rebuild
-docker compose build --no-cache whatsapp; if ($?) { docker compose up -d whatsapp }
+docker compose -f docker-compose.prod.yml build --no-cache whatsapp-service
+docker compose -f docker-compose.prod.yml up -d whatsapp-service
 
-# Full rebuild
-docker compose build --no-cache; if ($?) { docker compose up -d }
+# Full rebuild (safe — uses stop, not down -v)
+bash scripts/deploy.sh
 ```
 
 Check logs:
-```powershell
+```bash
 docker logs wamvp_backend --tail 30
 docker logs wamvp_whatsapp --tail 20
 ```
@@ -154,6 +156,11 @@ docker logs wamvp_whatsapp --tail 20
 | Angular build error | `anyComponentStyle` budget too low | Increased to `8kb` |
 | Reservation created without user input | Hardcoded at "reservar" keyword, dead code (FAQ caught it first) | New `ReservationFlowService` with SI/NO flow |
 | Bot stuck asking SI/NO for reservations | 3 separate states (ASK_CONFIRMATION, CONFIRM_PARSED, COLLECT_MISSING) only accepted SI/NO | Unified ACTION_COLLECTING state that parses data from any message |
+| WhatsApp 440 conflict loop | Reconnected every 30s on conflict, triggered WhatsApp anti-spam | Max 5 retries with backoff (30s→120s), then 10min cooldown |
+| WhatsApp 515 server drop | Not handled, retried immediately | 5min cooldown on515 |
+| WhatsApp 401 auto-retry loop | Retried every 60s with invalid credentials, kept number blocked | No auto-retry on 401 — requires manual reset |
+| AI model not found | `llama-3.3-70b-versatile` no longer available on Groq | Changed to `openai/gpt-oss-20b` via env var |
+| Rate limit config ignored | `RateLimitService` hardcoded defaults, never read `application.yml` | Inject `AppProperties` instead of `BusinessConfigJpaRepository` |
 
 ---
 
@@ -241,4 +248,59 @@ docker compose -f docker-compose.prod.yml down -v
 - **Capacidad**: 112 mesas
 - **Música**: Ocasionalmente en vivo los domingos
 - **System prompt**: `backend/src/main/resources/system-prompt.txt` (AIService reads from classpath)
-- **IA**: Groq API (llama3-8b-8192) — solo como fallback cuando FAQ/keywords no matchean
+- **IA**: Groq API (openai/gpt-oss-20b) — solo como fallback cuando FAQ/keywords no matchean
+
+---
+
+## WhatsApp Connection Troubleshooting
+
+### Error Codes Reference
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| **401** | Logged out — credentials invalid | Manual reset required. DO NOT auto-retry (keeps number blocked) |
+| **403** | Forbidden — number may be banned | Stop. Check WhatsApp Business status |
+| **440** | Conflict — another device connected | Close all WhatsApp Web sessions, unlink all devices, then reset |
+| **408** | Timeout — connection unstable | Auto-retry with exponential backoff (handled by code) |
+| **515** | Server dropped connection — rate limit | Wait 5 minutes, then retry. Usually temporary |
+| **463** | Message undeliverable in ack | Transient — caused by unstable connection |
+
+### Reset Session Flow (VPS)
+
+```bash
+# 1. Stop service
+docker stop wamvp_whatsapp
+
+# 2. Delete ALL session files
+docker run --rm -v wamvp_wa_sessions:/sessions alpine sh -c "rm -rf /sessions/default/*"
+
+# 3. Restart
+docker start wamvp_whatsapp
+
+# 4. Monitor QR
+docker logs wamvp_whatsapp -f --tail 10
+
+# 5. Scan QR from PHONE (not WhatsApp Web)
+#    WhatsApp Business → Settings → Linked Devices → Link a Device
+```
+
+### Critical: 401 Auto-Retry Anti-Pattern
+
+**NEVER auto-retry on 401.** Each retry with invalid credentials tells WhatsApp "same device trying again" and keeps the number blocked. The 401 handler in `client.js` sets status to DISCONNECTED and stops. User must manually trigger `POST /session/reset`.
+
+### After Too Many Failed Attempts
+
+If you see repeated 440/515/401 errors:
+1. **Stop the service completely** (`docker stop wamvp_whatsapp`)
+2. **Wait 1-2 hours** for WhatsApp rate limiting to clear
+3. Delete session files
+4. Restart and scan QR fresh
+
+### Deploy After Fixes
+
+```bash
+cd /opt/MPV-Jarvis
+git pull
+docker compose -f docker-compose.prod.yml build --no-cache whatsapp-service backend
+docker compose -f docker-compose.prod.yml up -d whatsapp-service backend
+```
