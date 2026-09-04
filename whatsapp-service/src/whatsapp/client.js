@@ -60,6 +60,10 @@ async function setStatus(newStatus, extra = {}) {
  * Inicializa (o reinicia) la conexión de WhatsApp
  */
 async function connect() {
+  if (permanentDisconnect) {
+    logger.warn('[WA] permanentDisconnect active — aborting connect()');
+    return;
+  }
   try {
     await setStatus('CONNECTING');
     qrBase64 = null;
