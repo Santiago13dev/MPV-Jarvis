@@ -325,6 +325,9 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
     if (!confirm('¿Reiniciar la sesión? Se borrarán las credenciales y se generará un QR nuevo. Deberás escanear el QR con tu teléfono.')) return;
     this.status = 'CONNECTING';
     this.qrCode = null;
+    this.phone = '';
+    this.connectedAt = null;
+    this.errorMessage = null;
     this.api.resetWhatsapp().pipe(
       catchError(() => EMPTY)
     ).subscribe(() => this.refreshStatus());
