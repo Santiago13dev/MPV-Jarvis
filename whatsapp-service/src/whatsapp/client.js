@@ -64,7 +64,22 @@ async function connect() {
     qrBase64 = null;
 
     const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
-    const { state, saveCreds } = await useMultiFileAuthState(sessionsPath);
+    logger.info({ sessionsPath }, '[WA] Loading auth state...');
+
+    let state, saveCreds;
+    try {
+      const authState = await Promise.race([
+        useMultiFileAuthState(sessionsPath),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Auth state load timeout')), 15_000)),
+      ]);
+      state = authState.state;
+      saveCreds = authState.saveCreds;
+      logger.info('[WA] Auth state loaded');
+    } catch (err) {
+      logger.error({ err: err.message, sessionsPath }, '[WA] Failed to load auth state');
+      await setStatus('ERROR', { error: `Auth state failed: ${err.message}` });
+      return;
+    }
 
     // Fetch latest version with timeout — fallback to hardcoded if network fails
     const FALLBACK_VERSION = [2, 2413, 51];

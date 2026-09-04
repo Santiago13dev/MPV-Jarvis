@@ -13,7 +13,8 @@ RUN apk add --no-cache \
     ttf-freefont \
     python3 \
     make \
-    g++
+    g++ \
+    su-exec
 
 # Copiar package files y instalar dependencias
 COPY package*.json ./
@@ -28,8 +29,9 @@ RUN mkdir -p /app/sessions /app/media
 # Usuario no-root por seguridad
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 RUN chown -R appuser:appgroup /app
-USER appuser
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3001
 
-CMD ["node", "src/app.js"]
+ENTRYPOINT ["/app/entrypoint.sh"]
