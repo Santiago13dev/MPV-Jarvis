@@ -31,6 +31,7 @@ let qrBase64 = null;
 let sessionStatus = 'DISCONNECTED'; // DISCONNECTED | CONNECTING | QR_READY | CONNECTED | ERROR
 let reconnectAttempts = 0;
 let reconnectTimer = null;
+let permanentDisconnect = false; // true after 401/403 — blocks ALL reconnects
 
 // ── Límites para evitar loops infinitos de reconexión ─────────────────────────
 const MAX_CONFLICT_RETRIES = 5;      // Max intentos de 440 antes de cooldown largo
@@ -149,18 +150,23 @@ async function connect() {
 
         // 401 = Logged Out — credenciales inválidas, NO reintentar automáticamente
         if (statusCode === DisconnectReason.loggedOut) {
+          permanentDisconnect = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = null;
+          if (sock) { try { await sock.end(); } catch (_) {} }
+          sock = null;
           await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
           logger.error('[WA] Session logged out (401) — manual reset required. POST /session/reset');
-          // NO hacer retry automático — cada reintento mantiene el bloqueo de WhatsApp
           return;
         }
 
         // 403 = Forbidden — número baneado, no reconectar
         if (statusCode === 403) {
+          permanentDisconnect = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = null;
+          if (sock) { try { await sock.end(); } catch (_) {} }
+          sock = null;
           await setStatus('ERROR', { error: 'Number may be banned (403)' });
           logger.error('[WA] Number may be banned — not reconnecting');
           return;
@@ -247,6 +253,11 @@ async function connect() {
  * Después de max intentos, espera 5 minutos y reinicia el contador
  */
 function scheduleReconnect() {
+  if (permanentDisconnect) {
+    logger.warn('[WA] Permanent disconnect active — skipping reconnect');
+    return;
+  }
+
   if (reconnectAttempts >= config.maxReconnectAttempts) {
     logger.warn('[WA] Max attempts reached — cooldown 5 min before retrying');
     setStatus('ERROR', { error: 'Reconnecting after cooldown' });
@@ -293,7 +304,9 @@ async function disconnect() {
  */
 async function resetSession() {
   try {
+    permanentDisconnect = false;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     reconnectAttempts = 0;
     conflictRetries = 0;
 
