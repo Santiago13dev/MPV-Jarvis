@@ -201,6 +201,8 @@ async function connect() {
         if (statusCode === 515) {
           logger.error('[WA] Server dropped connection (515) — cooldown 5 min');
           await setStatus('ERROR', { error: 'Server rate limit (515) — cooling down' });
+          if (sock) { try { await sock.end(); } catch (_) {} }
+          sock = null;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(connect, 5 * 60 * 1000);
           return;
