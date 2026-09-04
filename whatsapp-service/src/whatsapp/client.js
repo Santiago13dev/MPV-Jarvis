@@ -65,7 +65,20 @@ async function connect() {
 
     const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
     const { state, saveCreds } = await useMultiFileAuthState(sessionsPath);
-    const { version } = await fetchLatestBaileysVersion();
+
+    // Fetch latest version with timeout — fallback to hardcoded if network fails
+    const FALLBACK_VERSION = [2, 2413, 51];
+    let version;
+    try {
+      const result = await Promise.race([
+        fetchLatestBaileysVersion(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Version fetch timeout')), 10_000)),
+      ]);
+      version = result.version;
+    } catch (err) {
+      logger.warn({ err: err.message }, '[WA] Failed to fetch Baileys version — using fallback');
+      version = FALLBACK_VERSION;
+    }
 
     logger.info({ version }, '[WA] Baileys version');
 
@@ -121,6 +134,8 @@ async function connect() {
 
         // 401 = Logged Out — credenciales inválidas, NO reintentar automáticamente
         if (statusCode === DisconnectReason.loggedOut) {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = null;
           await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
           logger.error('[WA] Session logged out (401) — manual reset required. POST /session/reset');
           // NO hacer retry automático — cada reintento mantiene el bloqueo de WhatsApp
@@ -129,6 +144,8 @@ async function connect() {
 
         // 403 = Forbidden — número baneado, no reconectar
         if (statusCode === 403) {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = null;
           await setStatus('ERROR', { error: 'Number may be banned (403)' });
           logger.error('[WA] Number may be banned — not reconnecting');
           return;
@@ -219,6 +236,7 @@ function scheduleReconnect() {
     logger.warn('[WA] Max attempts reached — cooldown 5 min before retrying');
     setStatus('ERROR', { error: 'Reconnecting after cooldown' });
     // Después de 5 minutos, reiniciar contador y volver a intentar
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectAttempts = 0;
       connect();
