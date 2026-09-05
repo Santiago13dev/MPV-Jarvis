@@ -289,7 +289,7 @@ public class MessageProcessingService {
         // ── PASO 5.65: Solicitud de menú — enviar PDF ─────────────────────────
         if (isMenuRequest(normalizedContent)) {
             log.info("[Pipeline] MENU request → sending PDF");
-            sendMenuPdf(conversation, remoteJid);
+            sendMenuPdf(conversation, remoteJid, pendingSends);
             return;
         }
 
@@ -664,7 +664,7 @@ public class MessageProcessingService {
      * Envía el PDF del menú al usuario.
      * El PDF está en static resources: /menu-bendito-chicharron.pdf
      */
-    private void sendMenuPdf(ConversationEntity conversation, String remoteJid) {
+    private void sendMenuPdf(ConversationEntity conversation, String remoteJid, List<PendingSend> pendingSends) {
         String targetJid = remoteJid != null && !remoteJid.isBlank()
                 ? remoteJid
                 : conversation.getContact().getPhone() + "@s.whatsapp.net";
