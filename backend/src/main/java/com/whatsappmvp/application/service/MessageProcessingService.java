@@ -81,28 +81,40 @@ public class MessageProcessingService {
     public void processIncomingMessage(String phone, String remoteJid, String displayName, String content,
                                        String waMessageId, MessageType messageType) {
         // Serializar por número de teléfono — evita race conditions
-        // cuando el usuario envía varios mensajes simultáneos
         Object lock = phoneLocks.computeIfAbsent(phone, k -> new Object());
+        List<PendingSend> pendingSends;
+
+        // FASE 1: DB operations — bajo lock y transacción
+        // Persiste inbound + outbound, actualiza conversación, encola respuestas
         synchronized (lock) {
             try {
-                processMessageInternal(phone, remoteJid, displayName, content, waMessageId, messageType);
+                pendingSends = new ArrayList<>();
+                transactionTemplate.executeWithoutResult(status -> {
+                    processMessageInTransaction(phone, remoteJid, displayName, content, waMessageId, messageType, pendingSends);
+                });
             } finally {
                 phoneLocks.remove(phone);
             }
         }
-    }
+        // ← Lock SUELTO. Otro mensaje del mismo teléfono puede empezar a procesar
 
-    private void processMessageInternal(String phone, String remoteJid, String displayName, String content,
-                                         String waMessageId, MessageType messageType) {
-        // Usar TransactionTemplate para manejar la transacción explícitamente
-        // (necesario porque processMessageInTransaction es privado y @Transactional no funciona en métodos privados)
-        transactionTemplate.executeWithoutResult(status -> {
-            processMessageInTransaction(phone, remoteJid, displayName, content, waMessageId, messageType);
-        });
+        // FASE 2: External calls — FUERA de lock y transacción
+        // Sleep + WhatsApp API — no bloquea otros mensajes del mismo teléfono
+        for (PendingSend ps : pendingSends) {
+            try {
+                Thread.sleep(5000);
+                whatsAppClient.sendText(ps.targetJid(), ps.text());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                log.error("[Pipeline] Failed to send WhatsApp message to {}: {}", ps.targetJid(), e.getMessage());
+            }
+        }
     }
 
     private void processMessageInTransaction(String phone, String remoteJid, String displayName, String content,
-                                              String waMessageId, MessageType messageType) {
+                                              String waMessageId, MessageType messageType,
+                                              List<PendingSend> pendingSends) {
         log.info("[Pipeline] Processing message from: {} | type: {} | content: '{}'",
                 phone, messageType, content != null ? content.substring(0, Math.min(50, content.length())) : "");
 
@@ -140,7 +152,7 @@ public class MessageProcessingService {
             log.warn("[Pipeline] Rate limit exceeded for: {} — sending notice", phone);
             sendAndPersistResponse(conversation, remoteJid,
                 "Estás enviando muchos mensajes. Por favor espera un momento y vuelve a intentar.",
-                ProcessedBy.SYSTEM, 0);
+                ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -173,7 +185,7 @@ public class MessageProcessingService {
             (normalizedContent.contains("reserva") || normalizedContent.contains("reservación") || normalizedContent.contains("reservacion"))) {
             log.info("[Pipeline] CANCEL RESERVATION trigger → starting cancel flow");
             String cancelMsg = reservationFlowService.startCancelFlow(conversation, phone);
-            sendAndPersistResponse(conversation, remoteJid, cancelMsg, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, cancelMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -203,7 +215,7 @@ public class MessageProcessingService {
                 conversationRepository.save(conversation);
                 sendAndPersistResponse(conversation, remoteJid,
                         "¡Perfecto! Sigo aquí para ayudarte con lo que necesites. 😊",
-                        ProcessedBy.SYSTEM, 0);
+                        ProcessedBy.SYSTEM, 0, pendingSends);
                 return;
             }
             // If neither accept nor reject, clear the pending action and continue normal pipeline
@@ -230,11 +242,11 @@ public class MessageProcessingService {
 
                     // Combine answer with reservation status
                     String combinedResponse = questionAnswer + "\n\n" + reservationStatus;
-                    sendAndPersistResponse(conversation, remoteJid, combinedResponse, ProcessedBy.SYSTEM, 0);
+                    sendAndPersistResponse(conversation, remoteJid, combinedResponse, ProcessedBy.SYSTEM, 0, pendingSends);
                     return;
                 }
 
-                sendAndPersistResponse(conversation, remoteJid, responseText, ProcessedBy.SYSTEM, 0);
+                sendAndPersistResponse(conversation, remoteJid, responseText, ProcessedBy.SYSTEM, 0, pendingSends);
                 return;
             }
             // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
@@ -244,7 +256,7 @@ public class MessageProcessingService {
         if (isReservationModification(normalizedContent)) {
             log.info("[Pipeline] RESERVATION MODIFICATION detected");
             String modMsg = reservationFlowService.handleModification(conversation, content, phone);
-            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -252,7 +264,7 @@ public class MessageProcessingService {
         if (isReservationIntent(normalizedContent)) {
             log.info("[Pipeline] RESERVATION trigger → starting reservation flow");
             String resMsg = reservationFlowService.startFlow(conversation, content, displayName);
-            sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -260,7 +272,7 @@ public class MessageProcessingService {
         if (isLocationRequest(normalizedContent)) {
             log.info("[Pipeline] LOCATION request → sending restaurant location");
             String locationMsg = "📍 Estamos ubicados en:\n*BENDITO CHICHARRÓN*\nSibaté, Cundinamarca\n\nTe envío la ubicación exacta:";
-            sendAndPersistResponse(conversation, remoteJid, locationMsg, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, locationMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             sendLocation(remoteJid, conversation,
                     4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
             return;
@@ -279,7 +291,7 @@ public class MessageProcessingService {
             humanTransferService.transferToHuman(conversation, remoteJid, "KEYWORD", content);
             sendAndPersistResponse(conversation, remoteJid,
                 "Un asesor se comunicará contigo pronto. ¡Gracias por tu paciencia! 😊",
-                ProcessedBy.SYSTEM, 0);
+                ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -287,7 +299,7 @@ public class MessageProcessingService {
         // UNKNOWN con contenido de texto se procesa como texto (puede ser respuesta a mensaje)
         if (messageType != null && messageType != MessageType.TEXT && messageType != MessageType.UNKNOWN) {
             String response = "📎 Recibí tu archivo. Un asesor lo revisará y te responderá pronto. 😊";
-            sendAndPersistResponse(conversation, remoteJid, response, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, response, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -298,7 +310,7 @@ public class MessageProcessingService {
         // ── PASO 6: Mensaje de bienvenida (primer mensaje del día/conversación) ─
         if (isFirstMessage) {
             String welcome = businessHoursService.getWelcomeMessage();
-            sendAndPersistResponse(conversation, remoteJid, welcome, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, welcome, ProcessedBy.SYSTEM, 0, pendingSends);
 
             // Enviar ubicación del restaurante
             sendLocation(remoteJid, conversation,
@@ -316,7 +328,7 @@ public class MessageProcessingService {
         var keywordMatch = keywordMatchingService.findMatch(content);
         if (keywordMatch.isPresent()) {
             log.info("[Pipeline] KEYWORD match → sending response");
-            sendAndPersistResponse(conversation, remoteJid, keywordMatch.get(), ProcessedBy.KEYWORD, 0);
+            sendAndPersistResponse(conversation, remoteJid, keywordMatch.get(), ProcessedBy.KEYWORD, 0, pendingSends);
             return;
         }
 
@@ -324,7 +336,7 @@ public class MessageProcessingService {
         var faqMatch = faqMatchingService.findMatch(content);
         if (faqMatch.isPresent()) {
             log.info("[Pipeline] FAQ match → sending response");
-            sendAndPersistResponse(conversation, remoteJid, faqMatch.get(), ProcessedBy.FAQ, 0);
+            sendAndPersistResponse(conversation, remoteJid, faqMatch.get(), ProcessedBy.FAQ, 0, pendingSends);
             return;
         }
 
@@ -333,7 +345,7 @@ public class MessageProcessingService {
         // if (!withinBusinessHours) {
         //     log.info("[Pipeline] Outside business hours — sending off-hours message");
         //     String offHoursMsg = businessHoursService.getOffHoursMessage();
-        //     sendAndPersistResponse(conversation, remoteJid, offHoursMsg, ProcessedBy.SYSTEM, 0);
+        //     sendAndPersistResponse(conversation, remoteJid, offHoursMsg, ProcessedBy.SYSTEM, 0, pendingSends);
         //     return;
         // }
 
@@ -354,7 +366,7 @@ public class MessageProcessingService {
             log.info("[Pipeline] No rule/FAQ match → escalating to AI");
             try {
                 OpenAIServiceClient.OpenAIResult aiResult = aiService.generateResponse(conversation.getId(), content);
-                sendAndPersistResponse(conversation, remoteJid, aiResult.getText(), ProcessedBy.AI, aiResult.getTokensUsed());
+                sendAndPersistResponse(conversation, remoteJid, aiResult.getText(), ProcessedBy.AI, aiResult.getTokensUsed(), pendingSends);
 
                 // ── PASO 9.05: Si la IA ofreció un asesor, trackear la oferta ──
                 String aiResponseLower = aiResult.getText().toLowerCase();
@@ -380,12 +392,12 @@ public class MessageProcessingService {
                 log.error("[Pipeline] AI call failed: {}", e.getMessage());
                 sendAndPersistResponse(conversation, remoteJid,
                     "Gracias por tu mensaje. Un asesor te atenderá pronto. 😊",
-                    ProcessedBy.SYSTEM, 0);
+                    ProcessedBy.SYSTEM, 0, pendingSends);
             }
         } else {
             log.info("[Pipeline] AI disabled and no match found → generic response");
             String generic = "Gracias por tu mensaje. En breve un asesor te atenderá. 😊";
-            sendAndPersistResponse(conversation, remoteJid, generic, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, generic, ProcessedBy.SYSTEM, 0, pendingSends);
         }
     }
 
@@ -445,39 +457,29 @@ public class MessageProcessingService {
         return messageRepository.save(message);
     }
 
+    private record PendingSend(String targetJid, String text) {}
+
     private void sendAndPersistResponse(ConversationEntity conversation, String remoteJid,
-                                         String responseText, ProcessedBy processedBy, int tokensUsed) {
+                                         String responseText, ProcessedBy processedBy, int tokensUsed,
+                                         List<PendingSend> pendingSends) {
         // Usar remoteJid (JID completo) para enviar, no solo el phone
         String targetJid = remoteJid != null && !remoteJid.isBlank()
                 ? remoteJid
                 : conversation.getContact().getPhone() + "@s.whatsapp.net";
 
-        // Delay humano antes de responder (evita detección de spam por Meta)
-        try {
-            Thread.sleep(5000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        // Enviar vía WhatsApp Service
-        boolean sent = false;
-        try {
-            whatsAppClient.sendText(targetJid, responseText);
-            sent = true;
-        } catch (Exception e) {
-            log.error("[Pipeline] Failed to send WhatsApp message to {}: {}", targetJid, e.getMessage());
-        }
-
-        // Persistir respuesta OUTBOUND (marcar status según éxito)
+        // Persistir respuesta OUTBOUND (dentro de la transacción)
         MessageEntity outbound = persistMessage(conversation, null,
                 MessageDirection.OUTBOUND, responseText, MessageType.TEXT, processedBy, tokensUsed);
-        outbound.setStatus(sent ? "SENT" : "FAILED");
+        outbound.setStatus("QUEUED");
         messageRepository.save(outbound);
 
         // Notificar dashboard
         wsPublisher.publishNewMessage(buildMessageEvent(outbound,
                 conversation.getContact().getPhone(),
                 conversation.getContact().getDisplayName()));
+
+        // Cola para envío FUERA de la transacción (sleep + WhatsApp API)
+        pendingSends.add(new PendingSend(targetJid, responseText));
     }
 
     private Map<String, Object> buildMessageEvent(MessageEntity msg, String phone, String name) {
@@ -661,7 +663,7 @@ public class MessageProcessingService {
 
         // Texto introductorio antes del PDF
         String introMessage = "📋 ¡Claro! Aquí tienes nuestro menú completo. 🍽️";
-        sendAndPersistResponse(conversation, remoteJid, introMessage, ProcessedBy.SYSTEM, 0);
+        sendAndPersistResponse(conversation, remoteJid, introMessage, ProcessedBy.SYSTEM, 0, pendingSends);
 
         // Ruta local del PDF dentro del container whatsapp-service
         String pdfPath = "/app/public/menu-bendito-chicharron.pdf";
@@ -674,7 +676,7 @@ public class MessageProcessingService {
             // Fallback: enviar mensaje de texto indicando que hay menú
             String fallbackMsg = "Disculpa, no pude enviar el menú en este momento. " +
                     "¿Puedes preguntar por horarios, precios o reservaciones? 😊";
-            sendAndPersistResponse(conversation, remoteJid, fallbackMsg, ProcessedBy.SYSTEM, 0);
+            sendAndPersistResponse(conversation, remoteJid, fallbackMsg, ProcessedBy.SYSTEM, 0, pendingSends);
         }
     }
 
