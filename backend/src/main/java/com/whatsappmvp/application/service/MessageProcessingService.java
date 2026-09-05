@@ -144,6 +144,14 @@ public class MessageProcessingService {
             return;
         }
 
+        // ── PASO 5.45: Modificar reserva existente ───────────────────────
+        if (isReservationModification(normalizedContent)) {
+            log.info("[Pipeline] RESERVATION MODIFICATION detected");
+            String modMsg = reservationFlowService.handleModification(conversation, content, phone);
+            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0);
+            return;
+        }
+
         // ── PASO 5.5: Si hay una acción pendiente (reserva en curso) ────────
         // PRIMERO verificar si hay reserva pendiente, ANTES de detectar nueva reserva
         if (reservationFlowService.hasPendingAction(conversation)) {
@@ -460,6 +468,28 @@ public class MessageProcessingService {
         }
 
         return false;
+    }
+
+    /**
+     * Detecta si el usuario quiere MODIFICAR una reserva existente (personas, fecha, hora).
+     */
+    private boolean isReservationModification(String normalizedContent) {
+        if (normalizedContent == null || normalizedContent.isBlank()) return false;
+        if (normalizedContent.contains("?") || normalizedContent.contains("¿")) return false;
+
+        boolean hasPeopleChange = normalizedContent.contains("personas") &&
+            (normalizedContent.contains("somos") || normalizedContent.contains("ser") ||
+             normalizedContent.contains("cambiar") || normalizedContent.contains("actualizar") ||
+             normalizedContent.contains("modificar") || normalizedContent.contains("son") ||
+             normalizedContent.matches(".*\\d+\\s*personas.*"));
+
+        boolean hasDateChange = (normalizedContent.contains("cambiar") || normalizedContent.contains("mover")) &&
+            (normalizedContent.contains("fecha") || normalizedContent.contains("dia") || normalizedContent.contains("día"));
+
+        boolean hasTimeChange = (normalizedContent.contains("cambiar") || normalizedContent.contains("mover")) &&
+            (normalizedContent.contains("hora") || normalizedContent.contains("horario"));
+
+        return hasPeopleChange || hasDateChange || hasTimeChange;
     }
 
     /**

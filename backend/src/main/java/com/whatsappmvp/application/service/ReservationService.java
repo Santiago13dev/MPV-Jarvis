@@ -61,7 +61,23 @@ public class ReservationService {
         Optional<ReservationEntity> opt = reservationRepository.findLatestActiveByPhoneNumber(phoneNumber);
         if (opt.isEmpty()) return Optional.empty();
         ReservationEntity entity = opt.get();
-        entity.setStatus(ReservationStatus.CANCELADA);
+        reservationRepository.delete(entity);
+        return Optional.of(entity);
+    }
+
+    @Transactional
+    public Optional<ReservationEntity> updateLatestPeopleCount(String phoneNumber, int newPeopleCount) {
+        Optional<ReservationEntity> opt = reservationRepository.findLatestActiveByPhoneNumber(phoneNumber);
+        if (opt.isEmpty()) return Optional.empty();
+        ReservationEntity entity = opt.get();
+        String notes = entity.getNotes() != null ? entity.getNotes() : "";
+        // Reemplazar o agregar "Personas: X" en notes
+        if (notes.contains("Personas:")) {
+            notes = notes.replaceAll("Personas:\\s*\\d+", "Personas: " + newPeopleCount);
+        } else {
+            notes = "Personas: " + newPeopleCount + ". " + notes;
+        }
+        entity.setNotes(notes.trim());
         reservationRepository.save(entity);
         return Optional.of(entity);
     }

@@ -154,7 +154,7 @@ public class ReservationFlowService {
         data.put("phone", phone);
         conversation.setPendingActionData(data.toString());
         conversationRepository.save(conversation);
-        return "Deseas cancelar tu reserva? Responde *SI* o *NO*";
+        return "Deseas cancelar tu reserva? Se eliminara del sistema. Responde *SI* o *NO*";
     }
 
     // ── Step: Collect data (unified) ──────────────────────────────────────
@@ -359,7 +359,7 @@ public class ReservationFlowService {
                         ? r.getReservationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
                         : "N/A";
                     return Optional.of(String.format(
-                        "Reserva cancelada\n\n%s\n%s\n\nSi necesitas hacer una nueva reserva, escribe *reservar*.",
+                        "Reserva eliminada\n\n%s\n%s\n\nSi necesitas hacer una nueva reserva, escribe *reservar*.",
                         r.getCustomerName(), dateStr
                     ));
                 } else {
@@ -377,6 +377,38 @@ public class ReservationFlowService {
         } else {
             return Optional.of("Por favor responde *SI* o *NO*");
         }
+    }
+
+    // ── Step: Modify existing reservation ──────────────────────────────
+
+    public String handleModification(ConversationEntity conversation, String content, String phone) {
+        String normalized = content != null ? content.trim().toLowerCase() : "";
+
+        // Parsear cantidad de personas del mensaje
+        Integer newPeopleCount = parsePeopleCount(normalized);
+
+        if (newPeopleCount != null && newPeopleCount > 0) {
+            try {
+                var updated = reservationService.updateLatestPeopleCount(phone, newPeopleCount);
+                if (updated.isPresent()) {
+                    var r = updated.get();
+                    String dateStr = r.getReservationDate() != null
+                        ? r.getReservationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                        : "N/A";
+                    return String.format(
+                        "Reserva actualizada\n\n%s\n%s\nPersonas: %d\n\n¡Confirmado!",
+                        r.getCustomerName(), dateStr, newPeopleCount
+                    );
+                } else {
+                    return "No encontré ninguna reserva activa a tu nombre. Si deseas hacer una nueva reserva, escribe *reservar*.";
+                }
+            } catch (Exception e) {
+                log.error("[ReservationFlow] Error updating reservation: {}", e.getMessage());
+                return "Hubo un error al actualizar tu reserva. Por favor intenta de nuevo.";
+            }
+        }
+
+        return "¿Cuántas personas serán? Por ejemplo: *somos 10 personas*";
     }
 
     // ── Helper: Create reservation from stored data ────────────────────
