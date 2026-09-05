@@ -767,8 +767,43 @@ public class ReservationFlowService {
             return Optional.of("__INTERRUPTION__" + statusNote.toString());
         }
 
-        // Si no es pregunta ni confirmación ni cancelación, podría ser datos de reserva
-        return Optional.empty();
+        // Si no es pregunta ni confirmación ni cancelación, tratar como conversacional
+        // (e.g. "puedo llevar a mi hijo perruno", "tienenwifi", etc.)
+        log.info("[ReservationFlow] Conversational message during reservation - treating as question");
+        ObjectNode data = readData(conversation);
+        ParsedReservation current = dataToParsed(data, displayName);
+
+        StringBuilder statusNote = new StringBuilder();
+        statusNote.append("¿Sigo con tu reserva?\n\n");
+
+        if (current.parsedDate != null || current.peopleCount > 0 || current.time != null || current.customerName != null) {
+            statusNote.append("📝 Detecté:\n");
+            if (current.parsedDate != null) {
+                statusNote.append("- Fecha: Sábado ").append(current.parsedDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))).append("\n");
+            }
+            if (current.peopleCount > 0) {
+                statusNote.append("- Personas: ").append(current.peopleCount).append("\n");
+            }
+            if (current.time != null) {
+                statusNote.append("- Hora: ").append(current.time).append("\n");
+            }
+            if (current.customerName != null && !current.customerName.isBlank()) {
+                statusNote.append("- Nombre: ").append(current.customerName).append("\n");
+            }
+            if (current.motive != null) {
+                statusNote.append("- Motivo: ").append(current.motive).append("\n");
+            }
+        }
+
+        statusNote.append("\n⏳ Falta:\n");
+        if (current.parsedDate == null) statusNote.append("- *Fecha* (solo sábados)\n");
+        if (current.peopleCount == 0) statusNote.append("- *Número de personas*\n");
+        if (current.time == null) statusNote.append("- *Hora* (11:30, 12:00, 12:30 o 1:00 PM)\n");
+        if (current.customerName == null || current.customerName.isBlank()) statusNote.append("- *Tu nombre*\n");
+
+        statusNote.append("\nRespondo tu pregunta y luego continuamos con la reserva.");
+
+        return Optional.of("__INTERRUPTION__" + statusNote.toString());
     }
 
     /**

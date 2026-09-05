@@ -34,7 +34,7 @@ public class RateLimitService {
     private final Semaphore outboundSemaphore = new Semaphore(3);
     // Delay mínimo entre mensajes al mismo usuario (evita flooding)
     private final Map<String, Instant> lastSendTime = new ConcurrentHashMap<>();
-    private static final Duration MIN_DELAY_BETWEEN_SENDS = Duration.ofSeconds(3);
+    private static final Duration MIN_DELAY_BETWEEN_SENDS = Duration.ofSeconds(5);
 
     /**
      * Verifica si el teléfono está dentro del límite de mensajes.
