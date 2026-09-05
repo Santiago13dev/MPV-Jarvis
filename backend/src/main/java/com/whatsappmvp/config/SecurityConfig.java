@@ -44,6 +44,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/webhook/**").permitAll() // protegido por X-Webhook-Secret header
                 .requestMatchers("/actuator/health").permitAll()
                 .requestMatchers("/ws/**").permitAll()           // WebSocket handshake
+                .requestMatchers("/*.pdf", "/menu/**").permitAll() // PDFs estáticos
                 .anyRequest().authenticated()
             )
             .authenticationProvider(authenticationProvider())
