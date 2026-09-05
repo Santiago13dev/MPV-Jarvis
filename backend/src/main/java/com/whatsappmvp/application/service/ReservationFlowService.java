@@ -440,23 +440,48 @@ public class ReservationFlowService {
     public String handleModification(ConversationEntity conversation, String content, String phone) {
         String normalized = content != null ? content.trim().toLowerCase() : "";
 
-        // Parsear cantidad de personas del mensaje
-        Integer newPeopleCount = parsePeopleCount(normalized, normalized);
+        // Detectar si es adición ("llevar 2 más") o reemplazo ("cambiar a 5 personas")
+        boolean isAdditive = (normalized.contains("llevar") || normalized.contains("agregar") ||
+                normalized.contains("adicionar") || normalized.contains("sumar")) &&
+                (normalized.contains("más") || normalized.contains("mas"));
 
-        if (newPeopleCount != null && newPeopleCount > 0) {
+        // Parsear cantidad de personas del mensaje
+        Integer parsedCount = parsePeopleCount(normalized, normalized);
+
+        if (parsedCount != null && parsedCount > 0) {
             try {
-                var updated = reservationService.updateLatestPeopleCount(phone, newPeopleCount);
-                if (updated.isPresent()) {
-                    var r = updated.get();
-                    String dateStr = r.getReservationDate() != null
-                        ? r.getReservationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-                        : "N/A";
-                    return String.format(
-                        "Reserva actualizada\n\n%s\n%s\nPersonas: %d\n\n¡Confirmado!",
-                        r.getCustomerName(), dateStr, r.getPeopleCount() != null ? r.getPeopleCount() : newPeopleCount
-                    );
+                if (isAdditive) {
+                    // Sumar al conteo existente
+                    var updated = reservationService.addPeopleToLatest(phone, parsedCount);
+                    if (updated.isPresent()) {
+                        var r = updated.get();
+                        String dateStr = r.getReservationDate() != null
+                            ? r.getReservationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                            : "N/A";
+                        return String.format(
+                            "¡Listo! Actualicé tu reserva:\n\n" +
+                            "👤 %s\n📅 %s\n👥 %d personas (agregué %d)\n\n" +
+                            "¡Confirmado!",
+                            r.getCustomerName(), dateStr, r.getPeopleCount(), parsedCount
+                        );
+                    } else {
+                        return "No encontré ninguna reserva activa a tu nombre. Si deseas hacer una nueva reserva, escribe *reservar*.";
+                    }
                 } else {
-                    return "No encontré ninguna reserva activa a tu nombre. Si deseas hacer una nueva reserva, escribe *reservar*.";
+                    // Reemplazo directo
+                    var updated = reservationService.updateLatestPeopleCount(phone, parsedCount);
+                    if (updated.isPresent()) {
+                        var r = updated.get();
+                        String dateStr = r.getReservationDate() != null
+                            ? r.getReservationDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                            : "N/A";
+                        return String.format(
+                            "Reserva actualizada\n\n%s\n%s\nPersonas: %d\n\n¡Confirmado!",
+                            r.getCustomerName(), dateStr, r.getPeopleCount() != null ? r.getPeopleCount() : parsedCount
+                        );
+                    } else {
+                        return "No encontré ninguna reserva activa a tu nombre. Si deseas hacer una nueva reserva, escribe *reservar*.";
+                    }
                 }
             } catch (Exception e) {
                 log.error("[ReservationFlow] Error updating reservation: {}", e.getMessage());

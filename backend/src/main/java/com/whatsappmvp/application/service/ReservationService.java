@@ -76,6 +76,17 @@ public class ReservationService {
         return Optional.of(entity);
     }
 
+    @Transactional
+    public Optional<ReservationEntity> addPeopleToLatest(String phoneNumber, int additionalPeople) {
+        Optional<ReservationEntity> opt = reservationRepository.findLatestActiveByPhoneNumber(phoneNumber);
+        if (opt.isEmpty()) return Optional.empty();
+        ReservationEntity entity = opt.get();
+        int existing = entity.getPeopleCount() != null ? entity.getPeopleCount() : 0;
+        entity.setPeopleCount(existing + additionalPeople);
+        reservationRepository.save(entity);
+        return Optional.of(entity);
+    }
+
     private ReservationResponse mapToResponse(ReservationEntity entity) {
         return ReservationResponse.builder()
                 .id(entity.getId())

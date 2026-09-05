@@ -598,19 +598,25 @@ public class MessageProcessingService {
         // Excluir si contiene intención de reserva (es una reserva nueva, no modificación)
         if (isReservationIntent(normalizedContent)) return false;
 
-        // Solo modificar con verbos EXPLÍCITOS de modificación
-        boolean hasExplicitModifyVerb = normalizedContent.contains("cambiar") ||
-                                        normalizedContent.contains("actualizar") ||
-                                        normalizedContent.contains("modificar") ||
-                                        normalizedContent.contains("aumentar") ||
-                                        normalizedContent.contains("disminuir") ||
-                                        normalizedContent.contains("reducir");
+        // Detectar patrones aditivos: "llevar 2 más", "agregar 3 personas", "sumar 1"
+        boolean hasAdditivePattern = (normalizedContent.contains("llevar") || normalizedContent.contains("agregar") ||
+                normalizedContent.contains("adicionar") || normalizedContent.contains("sumar")) &&
+                (normalizedContent.contains("más") || normalizedContent.contains("mas"));
 
-        boolean hasPeopleRef = normalizedContent.contains("personas");
+        // Detectar verbos EXPLÍCITOS de modificación
+        boolean hasExplicitModifyVerb = normalizedContent.contains("cambiar") ||
+                normalizedContent.contains("actualizar") ||
+                normalizedContent.contains("modificar") ||
+                normalizedContent.contains("aumentar") ||
+                normalizedContent.contains("disminuir") ||
+                normalizedContent.contains("reducir");
+
+        boolean hasPeopleRef = normalizedContent.contains("personas") || normalizedContent.contains("más") ||
+                normalizedContent.contains("mas");
         boolean hasDateRef = normalizedContent.contains("fecha") || normalizedContent.contains("día") || normalizedContent.contains("dia");
         boolean hasTimeRef = normalizedContent.contains("hora") || normalizedContent.contains("horario");
 
-        return hasExplicitModifyVerb && (hasPeopleRef || hasDateRef || hasTimeRef);
+        return hasAdditivePattern || (hasExplicitModifyVerb && (hasPeopleRef || hasDateRef || hasTimeRef));
     }
 
     /**
