@@ -136,7 +136,8 @@ public class MessageProcessingService {
 
         // ── PASO 5.4: Cancelar reserva — antes de iniciar reserva ───────────
         String normalizedContent = content != null ? content.trim().toLowerCase() : "";
-        if (normalizedContent.contains("cancelar") && normalizedContent.contains("reserva")) {
+        if ((normalizedContent.contains("cancelar") || normalizedContent.contains("eliminar")) &&
+            (normalizedContent.contains("reserva") || normalizedContent.contains("reservación") || normalizedContent.contains("reservacion"))) {
             log.info("[Pipeline] CANCEL RESERVATION trigger → starting cancel flow");
             String cancelMsg = reservationFlowService.startCancelFlow(conversation, phone);
             sendAndPersistResponse(conversation, remoteJid, cancelMsg, ProcessedBy.SYSTEM, 0);
@@ -382,8 +383,8 @@ public class MessageProcessingService {
      */
     private boolean isReservationIntent(String normalizedContent) {
         if (normalizedContent == null || normalizedContent.isBlank()) return false;
-        // Excluir cancelaciones (ya manejado en paso 5.4)
-        if (normalizedContent.contains("cancelar")) return false;
+        // Excluir cancelaciones/eliminaciones (ya manejado en paso 5.4)
+        if (normalizedContent.contains("cancelar") || normalizedContent.contains("eliminar")) return false;
 
         // Palabras clave directas de reserva
         if (normalizedContent.contains("reserva") ||

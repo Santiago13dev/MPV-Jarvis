@@ -129,12 +129,12 @@ public class ReservationFlowService {
         boolean hasTime = parsed.time != null;
         boolean hasMotive = parsed.motive != null;
 
-        if (hasName && hasDate && hasPeople) {
+        if (hasName && hasDate && hasPeople && hasTime) {
             return createReservationFromData(conversation, conversation.getContact().getPhone())
                 .orElse("Reserva creada exitosamente.");
         }
 
-        if (hasDate || hasPeople || hasMotive || hasTime) {
+        if (hasDate || hasPeople || hasMotive || hasTime || hasName) {
             return buildCollectingMessage(parsed);
         }
 
@@ -315,7 +315,9 @@ public class ReservationFlowService {
             boolean hasDate = reservationDate != null;
             boolean hasPeople = peopleCount != null && peopleCount > 0;
 
-            if (hasName && hasDate && hasPeople) {
+            boolean hasTime = time != null;
+
+            if (hasName && hasDate && hasPeople && hasTime) {
                 return createReservationFromData(conversation, phone);
             }
 
@@ -670,6 +672,21 @@ public class ReservationFlowService {
 
         if (lower.contains("una de la tarde")) return "13:00";
         if (lower.contains("una de la mañana") || lower.contains("una de la manana")) return "11:00";
+
+        Pattern p3 = Pattern.compile("(\\d{1,2})\\s+de\\s+la\\s+tarde");
+        Matcher m3 = p3.matcher(lower);
+        if (m3.find()) {
+            int hour = Integer.parseInt(m3.group(1));
+            if (hour < 12) hour += 12;
+            return String.format("%02d:00", hour);
+        }
+
+        Pattern p4 = Pattern.compile("(\\d{1,2})\\s+de\\s+la\\s+(?:mañana|manana)");
+        Matcher m4 = p4.matcher(lower);
+        if (m4.find()) {
+            int hour = Integer.parseInt(m4.group(1));
+            return String.format("%02d:00", hour);
+        }
 
         return null;
     }
