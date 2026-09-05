@@ -711,59 +711,41 @@ public class ReservationFlowService {
 
     /**
      * Detecta si un mensaje NO es datos de reserva.
-     * Retorna true si el mensaje es claramente una pregunta, conversación general,
-     * o algo no relacionado con datos de reserva.
+     * Solo retorna true para mensajes claramente NO relacionados con reserva.
+     * Conservador: ante la duda, retorna false (asume que SÍ es dato de reserva).
      */
     private boolean isNotReservationData(String normalized) {
-        // Preguntas
+        if (normalized == null || normalized.isBlank()) return true;
+
+        // Preguntas claras (contienen ? o ¿)
         if (normalized.contains("?") || normalized.contains("¿")) return true;
 
         // NO descartar si contiene datos de reserva válidos
-        // Fechas: dd/mm/yyyy, dd-mm-yyyy
         if (normalized.matches(".*\\d{1,2}[/\\-]\\d{1,2}[/\\-]\\d{4}.*")) return false;
-        // Horas: HH:MM
         if (normalized.matches(".*\\d{1,2}\\s*:\\s*\\d{2}.*")) return false;
-        // "las 12", "a las 3", etc.
         if (normalized.matches(".*las?\\s+\\d{1,2}.*")) return false;
-        // Números solos (personas): "15", "5", "10"
         if (normalized.matches("\\d{1,3}")) return false;
-        // "mañana", "sabado", días de la semana
         if (normalized.contains("mañana") || normalized.contains("manana") ||
             normalized.contains("sabado") || normalized.contains("sábado") ||
-            normalized.contains("lunes") || normalized.contains("martes") ||
-            normalized.contains("miercoles") || normalized.contains("miércoles") ||
-            normalized.contains("jueves") || normalized.contains("viernes") ||
-            normalized.contains("domingo")) return false;
-        // "de la tarde", "de la mañana"
-        if (normalized.contains("de la tarde") || normalized.contains("de la mañana") ||
+            normalized.contains("de la tarde") || normalized.contains("de la mañana") ||
             normalized.contains("de la manana")) return false;
 
-        // Palabras clave de preguntas/conversación que SÍ son no-reserva
-        String[] questionPatterns = {
-            "puedo", "puede", "pueden", "puedes",
-            "tienen", "hay",
-            "como", "cómo", "cuando", "cuándo", "donde", "dónde",
-            "que", "qué", "cuanto", "cuánto",
-            "quiero saber", "me gustaria", "me gustaría",
-            "necesito saber", "dime", "cuéntame", "cuentame",
-            "gracias", "por favor",
-            "hola", "buenos", "buenas",
-            "ok", "vale", "entendido",
-            "pero", "o sea", "osea",
-            "llueve", "lluvia", "clima",
-            "ayuda", "help"
-        };
+        // Saludos claros
+        if (normalized.equals("hola") || normalized.equals("buenos dias") ||
+            normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
+            normalized.equals("buen dia") || normalized.equals("buenos dias")) return true;
 
-        for (String pattern : questionPatterns) {
-            if (normalized.contains(pattern)) return true;
-        }
-
-        // Mensajes muy cortos (1-2 palabras) sin datos numéricos
+        // Solo descartar si es muy corto (1 palabra) y no contiene datos
         String[] words = normalized.split("\\s+");
-        if (words.length <= 2 && parsePeopleCount(normalized, normalized) == null) {
+        if (words.length == 1) {
+            // Una sola palabra: solo descartar si NO es un dato numérico
+            if (parsePeopleCount(normalized, normalized) != null) return false;
+            if (parseDateFromText(normalized) != null) return false;
+            if (parseTime(normalized, normalized) != null) return false;
             return true;
         }
 
+        // Mensajes de 2+ palabras: asumir que SÍ son datos/conversación de reserva
         return false;
     }
 

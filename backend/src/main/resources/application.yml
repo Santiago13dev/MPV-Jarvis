@@ -76,7 +76,7 @@ app:
 
   # ── Rate Limiting ────────────────────────────────────────────────────────────
   rate-limit:
-    max-messages-per-window: 10
+    max-messages-per-window: 30
     window-minutes: 5
 
   # ── Upload ──────────────────────────────────────────────────────────────────
