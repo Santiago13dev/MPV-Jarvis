@@ -718,34 +718,44 @@ public class ReservationFlowService {
         // Preguntas
         if (normalized.contains("?") || normalized.contains("¿")) return true;
 
-        // Palabras clave de preguntas/conversación
+        // NO descartar si contiene datos de reserva válidos
+        // Fechas: dd/mm/yyyy, dd-mm-yyyy
+        if (normalized.matches(".*\\d{1,2}[/\\-]\\d{1,2}[/\\-]\\d{4}.*")) return false;
+        // Horas: HH:MM
+        if (normalized.matches(".*\\d{1,2}\\s*:\\s*\\d{2}.*")) return false;
+        // "las 12", "a las 3", etc.
+        if (normalized.matches(".*las?\\s+\\d{1,2}.*")) return false;
+        // Números solos (personas): "15", "5", "10"
+        if (normalized.matches("\\d{1,3}")) return false;
+        // "mañana", "sabado", días de la semana
+        if (normalized.contains("mañana") || normalized.contains("manana") ||
+            normalized.contains("sabado") || normalized.contains("sábado") ||
+            normalized.contains("lunes") || normalized.contains("martes") ||
+            normalized.contains("miercoles") || normalized.contains("miércoles") ||
+            normalized.contains("jueves") || normalized.contains("viernes") ||
+            normalized.contains("domingo")) return false;
+        // "de la tarde", "de la mañana"
+        if (normalized.contains("de la tarde") || normalized.contains("de la mañana") ||
+            normalized.contains("de la manana")) return false;
+
+        // Palabras clave de preguntas/conversación que SÍ son no-reserva
         String[] questionPatterns = {
             "puedo", "puede", "pueden", "puedes",
-            "tienen", "tienen?", "hay", "hay?",
+            "tienen", "hay",
             "como", "cómo", "cuando", "cuándo", "donde", "dónde",
             "que", "qué", "cuanto", "cuánto",
             "quiero saber", "me gustaria", "me gustaría",
             "necesito saber", "dime", "cuéntame", "cuentame",
             "gracias", "por favor",
-            "Hola", "hola", "buenos", "buenas",
+            "hola", "buenos", "buenas",
             "ok", "vale", "entendido",
             "pero", "o sea", "osea",
             "llueve", "lluvia", "clima",
-            "torta", "llevar torta", "puedo llevar",
-            "perro", "perros", "perrito", "mascota",
-            "reservar", "reserva", "reservación",
             "ayuda", "help"
         };
 
         for (String pattern : questionPatterns) {
-            if (normalized.contains(pattern)) {
-                // Si contiene patrón de pregunta pero TAMBIÉN tiene datos de reserva
-                // (números de personas, fechas, horas), no limpiar
-                boolean hasData = parsePeopleCount(normalized, normalized) != null ||
-                                  parseDateFromText(normalized) != null ||
-                                  parseTime(normalized, normalized) != null;
-                if (!hasData) return true;
-            }
+            if (normalized.contains(pattern)) return true;
         }
 
         // Mensajes muy cortos (1-2 palabras) sin datos numéricos
