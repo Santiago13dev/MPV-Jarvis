@@ -385,6 +385,9 @@ public class MessageProcessingService {
         // Excluir cancelaciones/eliminaciones (ya manejado en paso 5.4)
         if (normalizedContent.contains("cancelar") || normalizedContent.contains("eliminar")) return false;
 
+        // Excluir preguntas — si lleva "?" o "¿", es una pregunta, no intención de reserva
+        if (normalizedContent.contains("?") || normalizedContent.contains("¿")) return false;
+
         // Palabras clave directas de reserva
         if (normalizedContent.contains("reserva") ||
             normalizedContent.contains("reservar") ||
@@ -429,8 +432,16 @@ public class MessageProcessingService {
             return true;
         }
 
-        // "llevar" + (torta/pastel) = cumpleaños = reserva
-        if (normalizedContent.contains("llevar") &&
+        // "llevar" + (torta/pastel) SOLO con verbos de intención explícita
+        // "quiero llevar torta" = reserva, pero "puedo llevar torta" = pregunta
+        boolean hasIntentionVerb = normalizedContent.contains("quiero") ||
+                                   normalizedContent.contains("voy a") ||
+                                   normalizedContent.contains("me gustaría") ||
+                                   normalizedContent.contains("me gustaria") ||
+                                   normalizedContent.contains("necesito") ||
+                                   normalizedContent.contains("agendar");
+
+        if (hasIntentionVerb && normalizedContent.contains("llevar") &&
             (normalizedContent.contains("torta") || normalizedContent.contains("pastel"))) {
             return true;
         }
