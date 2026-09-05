@@ -14,4 +14,5 @@ public class ReservationRequest {
     private BigDecimal amount;
     private ReservationStatus status;
     private String notes;
+    private Integer peopleCount;
 }

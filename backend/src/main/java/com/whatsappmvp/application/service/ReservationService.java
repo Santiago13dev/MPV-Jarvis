@@ -36,6 +36,7 @@ public class ReservationService {
                 .amount(request.getAmount())
                 .status(request.getStatus() != null ? request.getStatus() : ReservationStatus.PENDIENTE)
                 .notes(request.getNotes())
+                .peopleCount(request.getPeopleCount())
                 .build();
         
         ReservationEntity saved = reservationRepository.save(entity);
@@ -70,14 +71,7 @@ public class ReservationService {
         Optional<ReservationEntity> opt = reservationRepository.findLatestActiveByPhoneNumber(phoneNumber);
         if (opt.isEmpty()) return Optional.empty();
         ReservationEntity entity = opt.get();
-        String notes = entity.getNotes() != null ? entity.getNotes() : "";
-        // Reemplazar o agregar "Personas: X" en notes
-        if (notes.contains("Personas:")) {
-            notes = notes.replaceAll("Personas:\\s*\\d+", "Personas: " + newPeopleCount);
-        } else {
-            notes = "Personas: " + newPeopleCount + ". " + notes;
-        }
-        entity.setNotes(notes.trim());
+        entity.setPeopleCount(newPeopleCount);
         reservationRepository.save(entity);
         return Optional.of(entity);
     }
@@ -91,6 +85,7 @@ public class ReservationService {
                 .amount(entity.getAmount())
                 .status(entity.getStatus())
                 .notes(entity.getNotes())
+                .peopleCount(entity.getPeopleCount())
                 .createdAt(entity.getCreatedAt())
                 .build();
     }

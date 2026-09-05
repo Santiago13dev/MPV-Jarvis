@@ -397,7 +397,7 @@ public class ReservationFlowService {
                         : "N/A";
                     return String.format(
                         "Reserva actualizada\n\n%s\n%s\nPersonas: %d\n\n¡Confirmado!",
-                        r.getCustomerName(), dateStr, newPeopleCount
+                        r.getCustomerName(), dateStr, r.getPeopleCount() != null ? r.getPeopleCount() : newPeopleCount
                     );
                 } else {
                     return "No encontré ninguna reserva activa a tu nombre. Si deseas hacer una nueva reserva, escribe *reservar*.";
@@ -458,9 +458,9 @@ public class ReservationFlowService {
             req.setReservationDate(reservationDate.atTime(time != null ? parseTimeToLocalTime(time) : LocalTime.of(12, 0)));
             req.setAmount(new BigDecimal("40000.00"));
             req.setStatus(ReservationStatus.CONFIRMADA);
+            req.setPeopleCount(peopleCount > 0 ? peopleCount : null);
 
             StringBuilder notes = new StringBuilder();
-            if (peopleCount > 0) notes.append("Personas: ").append(peopleCount).append(". ");
             if (motive != null) notes.append("Motivo: ").append(motive).append(". ");
             if (honoree != null) notes.append("Homenajeado: ").append(honoree).append(". ");
             if (time != null) notes.append("Hora: ").append(time).append(".");

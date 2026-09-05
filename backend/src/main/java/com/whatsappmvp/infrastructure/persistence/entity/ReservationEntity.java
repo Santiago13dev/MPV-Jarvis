@@ -43,6 +43,9 @@ public class ReservationEntity {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
+    @Column(name = "people_count")
+    private Integer peopleCount;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "conversation_id")
     private ConversationEntity conversation;

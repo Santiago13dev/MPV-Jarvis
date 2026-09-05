@@ -20,6 +20,7 @@ import { Reservation, ReservationStatus } from '../../core/models/models';
             <tr>
               <th>Cliente</th>
               <th>Teléfono</th>
+              <th>Personas</th>
               <th>Fecha/Hora</th>
               <th>Monto</th>
               <th>Estado</th>
@@ -30,6 +31,7 @@ import { Reservation, ReservationStatus } from '../../core/models/models';
             <tr *ngFor="let res of reservations">
               <td class="font-medium">{{ res.customerName }}</td>
               <td>{{ res.phoneNumber }}</td>
+              <td>{{ res.peopleCount || '-' }}</td>
               <td>{{ res.reservationDate | date:'short' }}</td>
               <td>{{ res.amount | currency }}</td>
               <td>
@@ -123,12 +125,13 @@ import { Reservation, ReservationStatus } from '../../core/models/models';
       td:last-child { border-bottom: none; }
       td:nth-of-type(1)::before { content: 'Cliente'; }
       td:nth-of-type(2)::before { content: 'Teléfono'; }
-      td:nth-of-type(3)::before { content: 'Fecha/Hora'; }
-      td:nth-of-type(4)::before { content: 'Monto'; }
-      td:nth-of-type(5)::before { content: 'Estado'; }
-      td:nth-of-type(6) { flex-direction: column; align-items: stretch; }
-      td:nth-of-type(6)::before { content: 'Acciones'; margin-bottom: 6px; }
-      td:nth-of-type(6) .flex { justify-content: flex-end; }
+      td:nth-of-type(3)::before { content: 'Personas'; }
+      td:nth-of-type(4)::before { content: 'Fecha/Hora'; }
+      td:nth-of-type(5)::before { content: 'Monto'; }
+      td:nth-of-type(6)::before { content: 'Estado'; }
+      td:nth-of-type(7) { flex-direction: column; align-items: stretch; }
+      td:nth-of-type(7)::before { content: 'Acciones'; margin-bottom: 6px; }
+      td:nth-of-type(7) .flex { justify-content: flex-end; }
     }
   `]
 })

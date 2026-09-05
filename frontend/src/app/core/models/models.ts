@@ -207,6 +207,7 @@ export interface Reservation {
   amount: number;
   status: ReservationStatus;
   notes?: string;
+  peopleCount?: number;
   createdAt: string;
 }
 

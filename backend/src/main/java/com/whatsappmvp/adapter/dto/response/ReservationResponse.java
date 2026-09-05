@@ -18,5 +18,6 @@ public class ReservationResponse {
     private BigDecimal amount;
     private ReservationStatus status;
     private String notes;
+    private Integer peopleCount;
     private LocalDateTime createdAt;
 }
