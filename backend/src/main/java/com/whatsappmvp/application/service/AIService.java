@@ -113,7 +113,7 @@ public class AIService {
     public Map<String, Object> extractReservationData(String message) {
         String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
         String dayOfWeek = LocalDate.now().getDayOfWeek().getDisplayName(
-                java.time.format.TextStyle.FULL, java.util.Locale.of("es"));
+                java.time.format.TextStyle.FULL, new java.util.Locale("es"));
 
         String extractionPrompt = String.format("""
                 Eres un asistente que extrae datos de reserva de restaurantes de mensajes en español.
