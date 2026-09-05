@@ -161,7 +161,22 @@ public class MessageProcessingService {
             log.info("[Pipeline] Pending reservation action detected → handling step");
             var stepResponse = reservationFlowService.handleStep(conversation, content, phone, displayName);
             if (stepResponse.isPresent()) {
-                sendAndPersistResponse(conversation, remoteJid, stepResponse.get(), ProcessedBy.SYSTEM, 0);
+                String responseText = stepResponse.get();
+
+                // Handle interruption marker: answer question + preserve reservation flow
+                if (responseText.startsWith("__INTERRUPTION__")) {
+                    String reservationStatus = responseText.substring("__INTERRUPTION__".length());
+
+                    // Try to answer the question using FAQ/AI
+                    String questionAnswer = answerQuestionDuringReservation(conversation, content, remoteJid);
+
+                    // Combine answer with reservation status
+                    String combinedResponse = questionAnswer + "\n\n" + reservationStatus;
+                    sendAndPersistResponse(conversation, remoteJid, combinedResponse, ProcessedBy.SYSTEM, 0);
+                    return;
+                }
+
+                sendAndPersistResponse(conversation, remoteJid, responseText, ProcessedBy.SYSTEM, 0);
                 return;
             }
             // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
@@ -589,5 +604,46 @@ public class MessageProcessingService {
                     "¿Puedes preguntar por horarios, precios o reservaciones? 😊";
             sendAndPersistResponse(conversation, remoteJid, fallbackMsg, ProcessedBy.SYSTEM, 0);
         }
+    }
+
+    /**
+     * Responde una pregunta del usuario durante el flujo de reserva.
+     * Usa FAQ matching y AI como fallback, sin interrumpir el flujo de reserva.
+     *
+     * @param conversation la conversación activa
+     * @param question la pregunta del usuario
+     * @param remoteJid el JID de WhatsApp
+     * @return la respuesta a la pregunta
+     */
+    private String answerQuestionDuringReservation(ConversationEntity conversation, String question, String remoteJid) {
+        log.info("[Pipeline] Answering question during reservation flow: {}", question);
+
+        // Intentar FAQ matching primero
+        var faqMatch = faqMatchingService.findMatch(question);
+        if (faqMatch.isPresent()) {
+            log.info("[Pipeline] FAQ match during reservation: {}", faqMatch.get());
+            return faqMatch.get();
+        }
+
+        // Intentar keyword matching
+        var keywordMatch = keywordMatchingService.findMatch(question);
+        if (keywordMatch.isPresent()) {
+            log.info("[Pipeline] Keyword match during reservation: {}", keywordMatch.get());
+            return keywordMatch.get();
+        }
+
+        // Fallback a AI
+        try {
+            var aiResult = aiService.generateResponse(conversation.getId(), question);
+            if (aiResult != null && aiResult.getText() != null && !aiResult.getText().isBlank()) {
+                log.info("[Pipeline] AI response during reservation (tokens: {})", aiResult.getTokensUsed());
+                return aiResult.getText();
+            }
+        } catch (Exception e) {
+            log.error("[Pipeline] AI error during reservation question: {}", e.getMessage());
+        }
+
+        // Default response if nothing works
+        return "Con gusto te ayudo con eso. ¿En qué más puedo ayudarte?";
     }
 }

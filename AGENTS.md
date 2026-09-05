@@ -51,19 +51,21 @@ Key: FAQs and keywords work **24/7** (before business hours check). Only AI and 
 
 ### Reservation Flow (ReservationFlowService.java)
 Flow:
-1. Client: "reservar" or natural intent → Bot parses all available data
-2. If data complete → Creates reservation directly (no SI/NO needed)
-3. If data incomplete → Shows detected data + asks for missing fields
-4. Client: sends data → Bot parses and adds to context
-5. When all required data collected → Creates reservation as CONFIRMADA
+1. Client: "reservar" or natural intent → Bot uses `smartParse()` (regex first, LLM fallback)
+2. If data complete → Shows confirmation summary (📅🕐👥👤) → Client: "SI" → Creates reservation
+3. If data incomplete → Shows detected data + what's missing + "Envíame los datos faltantes o pregunta lo que necesites"
+4. Client: sends more data → Bot parses and merges with existing (new overwrites, existing preserved)
+5. Client: asks a question → Bot answers (FAQ/AI) + "¿Sigo con tu reserva?" + shows current status (NO se pierde el contexto)
 6. Client: "NO" → Bot: "¡Perfecto! Si necesitas algo más, estoy aquí."
+7. State tracked via `conversations.pending_action` = `RESERVATION_COLLECTING` and `conversations.pending_action_data` (JSON).
+8. Auto-expiry: 30 minutes of inactivity clears pending action.
 
-State tracked via `conversations.pending_action` = `RESERVATION_COLLECTING` and `conversations.pending_action_data` (JSON).
-
-Detection patterns (isReservationIntent):
-- Direct: reservar, reserva, apartar, agendar
-- Contextual: "quiero hacer" + mesa/cita/reunión, "necesito" + mesa/lugar, "llevar" + torta/pastel
-- Combined: "para X personas" + sábado/fecha
+Key improvements:
+- **Smart parsing**: `smartParse()` tries regex (fast, free) first, then LLM (Groq) as fallback when regex misses fields
+- **Non-destructive interruptions**: Questions during reservation DON'T clear the flow. Bot answers + preserves context.
+- **Confirmation summary**: Shows full details with emojis before creating reservation
+- **Data merging**: Each message merges new data with existing (no data loss)
+- **Better UX**: Emojis (📅🕐👥👤🎂🎉), clear formatting, "Envíame los datos faltantes o pregunta lo que necesites"
 
 ### Angular Budget Fix
 - `angular.json` → `anyComponentStyle: maxError` increased from `4kb` to `8kb` (pre-existing build error)
@@ -126,7 +128,7 @@ docker logs wamvp_whatsapp --tail 20
 - `backend/src/main/java/com/whatsappmvp/application/service/BusinessHoursService.java` — `isWithinBusinessHours()` checks DB `business_hours` by day-of-week
 - `backend/src/main/java/com/whatsappmvp/application/service/FaqMatchingService.java` — Keyword/phrase matching
 - `backend/src/main/java/com/whatsappmvp/application/service/KeywordMatchingService.java` — Matches against `keyword_rules` table
-- `backend/src/main/java/com/whatsappmvp/application/service/AIService.java` — Reads system-prompt.txt from classpath
+- `backend/src/main/java/com/whatsappmvp/application/service/AIService.java` — Reads system-prompt.txt from classpath + `extractReservationData()` for LLM-based extraction
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/WebhookController.java` — Receives messages from Node.js, passes `remoteJid`
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/WhatsappSessionController.java` — `POST /api/whatsapp/reset`
 - `backend/src/main/java/com/whatsappmvp/adapter/in/web/ReservationController.java` — CRUD REST API `/api/reservations`
@@ -222,7 +224,7 @@ docker compose -f docker-compose.prod.yml down -v
 
 ## Pending / Future Work
 
-- [ ] Verify reservation flow end-to-end (test "reservar" → "SI" → data)
+- [x] Verify reservation flow end-to-end (test "reservar" → "SI" → data)
 - [ ] Business hours configuration in DB — check `business_hours` table rows
 - [ ] WhatsApp connection stability (440/408 errors on reconnect)
 - [ ] Rate limit tuning

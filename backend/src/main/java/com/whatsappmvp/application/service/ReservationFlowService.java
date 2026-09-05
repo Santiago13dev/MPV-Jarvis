@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -31,6 +32,7 @@ public class ReservationFlowService {
     private final ConversationJpaRepository conversationRepository;
     private final ReservationService reservationService;
     private final ObjectMapper objectMapper;
+    private final AIService aiService;
 
     public static final String ACTION_COLLECTING = "RESERVATION_COLLECTING";
     public static final String ACTION_CANCEL_CONFIRM = "RESERVATION_CANCEL_CONFIRM";
@@ -75,18 +77,19 @@ public class ReservationFlowService {
 
     @Transactional
     public String startFlow(ConversationEntity conversation, String content, String displayName) {
-        String normalized = content.trim().toLowerCase();
-        ParsedReservation parsed = parseInitialMessage(normalized, displayName);
+        // Use smartParse for aggressive extraction (regex + LLM fallback)
+        ParsedReservation parsed = smartParse(content, displayName);
 
         ObjectNode data = objectMapper.createObjectNode();
         data.put("phone", conversation.getContact().getPhone());
-        if (parsed.customerName != null) data.put("customerName", parsed.customerName);
+        if (parsed.customerName != null && !parsed.customerName.isBlank()) data.put("customerName", parsed.customerName);
         if (parsed.parsedDate != null) data.put("parsedDate", parsed.parsedDate.toString());
         if (parsed.peopleCount > 0) data.put("peopleCount", parsed.peopleCount);
         if (parsed.motive != null) data.put("motive", parsed.motive);
         if (parsed.honoree != null) data.put("honoree", parsed.honoree);
         if (parsed.time != null) data.put("time", parsed.time);
 
+        // Handle "mañana" + not Saturday
         if (parsed.mananaNotSaturday) {
             LocalDate nextSat = findNextSaturday();
             LocalDate tomorrow = nowColombia().plusDays(1);
@@ -96,15 +99,16 @@ public class ReservationFlowService {
             conversationRepository.save(conversation);
             return String.format(
                 "Mañana (%s %s) no hacemos reservas.\n\n" +
-                "Solo hacemos reservas los sabados.\n\n" +
-                "El proximo sabado es: *%s*\n\n" +
-                "Quieres reservar para ese dia? Responde *SI* o *NO*, o envia los datos de tu reserva.",
+                "Solo hacemos reservas los sábados.\n\n" +
+                "El próximo sábado es: *%s*\n\n" +
+                "¿Quieres reservar para ese día? Responde *SI* o *NO*, o envía los datos de tu reserva.",
                 getDayName(tomorrow.getDayOfWeek()),
                 tomorrow.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
                 nextSat.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
             );
         }
 
+        // Handle day name mentioned (not Saturday)
         if (parsed.dayNameMentioned != null && parsed.parsedDate == null) {
             conversation.setPendingAction(ACTION_COLLECTING);
             conversation.setPendingActionData(data.toString());
@@ -112,6 +116,7 @@ public class ReservationFlowService {
             return buildDayNotAvailableMessage(parsed.dayNameMentioned);
         }
 
+        // Handle specific date that's not Saturday
         if (parsed.parsedDate != null && parsed.parsedDate.getDayOfWeek() != DayOfWeek.SATURDAY) {
             LocalDate nextSat = findNextSaturday();
             String dayName = getDayName(parsed.parsedDate.getDayOfWeek());
@@ -120,10 +125,10 @@ public class ReservationFlowService {
             conversation.setPendingActionData(data.toString());
             conversationRepository.save(conversation);
             return String.format(
-                "Solo hacemos reservas los sabados.\n\n" +
+                "Solo hacemos reservas los sábados.\n\n" +
                 "La fecha que mencionaste (%s %s) no aplica.\n\n" +
-                "El proximo sabado es: *%s*\n\n" +
-                "Quieres reservar para ese dia? Responde *SI* o *NO*, o envia los datos de tu reserva.",
+                "El próximo sábado es: *%s*\n\n" +
+                "¿Quieres reservar para ese día? Responde *SI* o *NO*, o envía los datos de tu reserva.",
                 dayName,
                 parsed.parsedDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
                 nextSat.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
@@ -138,24 +143,25 @@ public class ReservationFlowService {
         boolean hasDate = parsed.parsedDate != null;
         boolean hasPeople = parsed.peopleCount > 0;
         boolean hasTime = parsed.time != null;
-        boolean hasMotive = parsed.motive != null;
 
+        // If ALL required fields present, show confirmation summary
         if (hasName && hasDate && hasPeople && hasTime) {
-            return createReservationFromData(conversation, conversation.getContact().getPhone())
-                .orElse("Reserva creada exitosamente.");
+            return buildConfirmationSummary(data, conversation.getContact().getPhone());
         }
 
-        if (hasDate || hasPeople || hasMotive || hasTime || hasName) {
+        // If SOME fields present, show what was detected and what's missing
+        if (hasDate || hasPeople || hasTime || hasName) {
             return buildCollectingMessage(parsed);
         }
 
+        // No fields detected - ask for all
         return "¡Claro! Para hacer tu reserva necesito algunos datos:\n\n" +
-               "Fecha (solo sabados)\n" +
-               "Numero de personas\n" +
-               "Hora (11:30, 12:00, 12:30 o 13:00)\n" +
-               "Tu nombre\n" +
-               "Motivo (cumpleanos, reunion, etc.)\n\n" +
-               "Envialos todos juntos o uno por uno.";
+               "📅 Fecha (solo sábados)\n" +
+               "👥 Número de personas\n" +
+               "🕐 Hora (11:30, 12:00, 12:30 o 13:00)\n" +
+               "👤 Tu nombre\n" +
+               "🎂 Motivo (cumpleaños, reunión, etc.)\n\n" +
+               "Envíalos todos juntos o uno por uno.";
     }
 
     @Transactional
@@ -183,11 +189,13 @@ public class ReservationFlowService {
             boolean hasName = data.has("customerName") && !data.get("customerName").asText().isBlank();
             boolean hasDate = data.has("parsedDate") && !data.get("parsedDate").isNull();
             boolean hasPeople = data.has("peopleCount") && data.get("peopleCount").asInt() > 0;
+            boolean hasTime = data.has("time") && !data.get("time").isNull();
 
-            if (hasName && hasDate && hasPeople) {
+            if (hasName && hasDate && hasPeople && hasTime) {
                 return createReservationFromData(conversation, phone);
             } else {
-                return Optional.of(buildMissingDataMessage(data));
+                // Show confirmation summary with what we have, asking for missing
+                return Optional.of(buildConfirmationSummaryWithMissing(data));
             }
         }
 
@@ -197,157 +205,130 @@ public class ReservationFlowService {
             return Optional.of("¡Perfecto! Si necesitas algo más, estoy aquí.");
         }
 
-        // Detectar si el mensaje NO es datos de reserva (preguntas, conversación general)
-        // Si el usuario hace una pregunta o dice algo no relacionado, limpiar la acción pendiente
-        if (isNotReservationData(normalized)) {
-            log.info("[ReservationFlow] Message is not reservation data, clearing pending action");
-            clearPendingAction(conversation);
-            return Optional.empty(); // Dejar que el pipeline normal maneje el mensaje
+        // Detectar si el mensaje es una pregunta o interrupción
+        // NO limpiar el pending action - mantener el flujo de reserva
+        boolean isQuestion = normalized.contains("?") || normalized.contains("¿");
+        boolean isGreeting = normalized.equals("hola") || normalized.equals("buenos dias") ||
+                normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
+                normalized.equals("buen dia") || normalized.equals("ok") || normalized.equals("gracias") ||
+                normalized.equals("entendido") || normalized.equals("va") || normalized.equals("dale");
+
+        // Check if message also contains reservation data (e.g. "quiero reservar para mañana 10 personas?")
+        boolean hasReservationDataInQuestion = isQuestion && (
+                normalized.contains("reserv") || normalized.contains("mañana") || normalized.contains("manana") ||
+                normalized.contains("sabado") || normalized.contains("sábado") ||
+                normalized.contains("personas") || normalized.contains("somos") ||
+                parsePeopleCount(normalized, normalized) != null ||
+                parseDateFromText(normalized) != null ||
+                parseTime(normalized, normalized) != null
+        );
+
+        if ((isQuestion || isGreeting) && !hasReservationDataInQuestion) {
+            log.info("[ReservationFlow] Question/greeting detected during flow - preserving reservation context");
+            // Handle interruption: answer question and ask to continue
+            Optional<String> interruptionResponse = handleInterruption(conversation, content, phone, displayName);
+            if (interruptionResponse.isPresent()) {
+                return interruptionResponse;
+            }
+            // If handleInterruption returned empty, it means it was a confirm/cancel
+            // which will be handled by the SI/NO checks above
         }
 
+        // Use smartParse for better extraction (regex + LLM fallback)
         try {
-            ObjectNode dataNode = readData(conversation);
+            ParsedReservation smartParsed = smartParse(content, displayName);
 
+            // Check for day name issues first
+            if (smartParsed.dayNameMentioned != null) {
+                return Optional.of(buildDayNotAvailableMessage(smartParsed.dayNameMentioned));
+            }
+
+            // Read existing data and merge
+            ObjectNode dataNode = readData(conversation);
             String storedPhone = dataNode.has("phone") ? dataNode.get("phone").asText() : phone;
-            String customerName = dataNode.has("customerName") ? dataNode.get("customerName").asText() : null;
+
+            // Merge: new data overwrites, existing preserved
+            String customerName = smartParsed.customerName;
+            if ((customerName == null || customerName.isBlank()) && dataNode.has("customerName")) {
+                customerName = dataNode.get("customerName").asText();
+            }
             if (customerName == null && displayName != null && !displayName.isBlank()) {
                 customerName = displayName;
             }
 
-            LocalDate reservationDate = null;
-            Integer peopleCount = null;
-            String motive = null;
-            String honoree = null;
-            String time = null;
-
-            if (dataNode.has("parsedDate") && !dataNode.get("parsedDate").isNull()) {
+            LocalDate reservationDate = smartParsed.parsedDate;
+            if (reservationDate == null && dataNode.has("parsedDate") && !dataNode.get("parsedDate").isNull()) {
                 try { reservationDate = LocalDate.parse(dataNode.get("parsedDate").asText()); } catch (Exception ignored) {}
             }
-            if (dataNode.has("peopleCount") && dataNode.get("peopleCount").asInt() > 0) {
+
+            Integer peopleCount = smartParsed.peopleCount > 0 ? smartParsed.peopleCount : null;
+            if (peopleCount == null && dataNode.has("peopleCount") && dataNode.get("peopleCount").asInt() > 0) {
                 peopleCount = dataNode.get("peopleCount").asInt();
             }
-            if (dataNode.has("motive") && !dataNode.get("motive").isNull()) {
-                motive = dataNode.get("motive").asText();
-            }
-            if (dataNode.has("honoree") && !dataNode.get("honoree").isNull()) {
-                honoree = dataNode.get("honoree").asText();
-            }
-            if (dataNode.has("time") && !dataNode.get("time").isNull()) {
+
+            String time = smartParsed.time;
+            if (time == null && dataNode.has("time") && !dataNode.get("time").isNull()) {
                 time = dataNode.get("time").asText();
             }
 
-            String lower = content.toLowerCase();
-
-            String dayNameMentioned = detectDayName(lower);
-            if (dayNameMentioned != null) {
-                return Optional.of(buildDayNotAvailableMessage(dayNameMentioned));
+            String motive = smartParsed.motive;
+            if (motive == null && dataNode.has("motive") && !dataNode.get("motive").isNull()) {
+                motive = dataNode.get("motive").asText();
             }
 
-            String[] lines = content.split("\\n");
-            for (String line : lines) {
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) continue;
-
-                String value = trimmed;
-                Pattern numPattern = Pattern.compile("^\\d+[.\\-)]\\s*(.+)$");
-                Matcher m = numPattern.matcher(trimmed);
-                if (m.matches()) {
-                    value = m.group(1).trim();
-                }
-
-                String lineLower = value.toLowerCase();
-                boolean matchedField = false;
-
-                if (reservationDate == null) {
-                    LocalDate parsed = parseDateFromText(lineLower);
-                    if (parsed != null) {
-                        if (parsed.getDayOfWeek() != DayOfWeek.SATURDAY) {
-                            LocalDate nextSat = findNextSaturday();
-                            String day = getDayName(parsed.getDayOfWeek());
-                            return Optional.of(String.format(
-                                "Solo hacemos reservas los sabados.\n\n" +
-                                "La fecha que indicaste (%s %s) no aplica.\n\n" +
-                                "El proximo sabado es: *%s*\n\n" +
-                                "Por favor envia la fecha correcta.",
-                                day,
-                                parsed.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                                nextSat.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-                            ));
-                        }
-                        reservationDate = parsed;
-                        matchedField = true;
-                    }
-                }
-
-                if (time == null) {
-                    String parsedTime = parseTime(lineLower, value);
-                    if (parsedTime != null) {
-                        if (!isValidTime(parsedTime)) {
-                            return Optional.of(
-                                "Los horarios disponibles son:\n\n" +
-                                "11:30 a.m.\n12:00 p.m.\n12:30 p.m.\n1:00 p.m.\n\n" +
-                                "Por favor elige uno de estos horarios."
-                            );
-                        }
-                        time = parsedTime;
-                        matchedField = true;
-                    }
-                }
-
-                if (peopleCount == null) {
-                    Integer parsedPeople = parsePeopleCount(lineLower, value);
-                    if (parsedPeople != null) {
-                        peopleCount = parsedPeople;
-                        matchedField = true;
-                    }
-                }
-
-                if (honoree == null && lineLower.equals("na")) {
-                    honoree = "N/A";
-                    matchedField = true;
-                }
-
-                if (customerName == null || customerName.isBlank()) {
-                    String detectedName = detectNameFromText(lineLower, value);
-                    if (detectedName != null) {
-                        customerName = detectedName;
-                        matchedField = true;
-                    }
-                }
-
-                // Solo asignar a motive/honoree si la linea no matcheo un campo conocido
-                if (!matchedField) {
-                    if (customerName == null || customerName.isBlank()) {
-                        customerName = value;
-                    } else if (motive == null) {
-                        motive = value;
-                    } else if (honoree == null) {
-                        honoree = value;
-                    }
-                }
+            String honoree = smartParsed.honoree;
+            if (honoree == null && dataNode.has("honoree") && !dataNode.get("honoree").isNull()) {
+                honoree = dataNode.get("honoree").asText();
             }
 
+            // Validate time if provided
+            if (time != null && !isValidTime(time)) {
+                return Optional.of(
+                    "Los horarios disponibles son:\n\n" +
+                    "11:30 a.m.\n12:00 p.m.\n12:30 p.m.\n1:00 p.m.\n\n" +
+                    "Por favor elige uno de estos horarios."
+                );
+            }
+
+            // Validate date if provided
+            if (reservationDate != null && reservationDate.getDayOfWeek() != DayOfWeek.SATURDAY) {
+                LocalDate nextSat = findNextSaturday();
+                String day = getDayName(reservationDate.getDayOfWeek());
+                return Optional.of(String.format(
+                    "Solo hacemos reservas los sábados.\n\n" +
+                    "La fecha que indicaste (%s %s) no aplica.\n\n" +
+                    "El próximo sábado es: *%s*\n\n" +
+                    "Por favor envía la fecha correcta.",
+                    day,
+                    reservationDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                    nextSat.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                ));
+            }
+
+            // Save merged data
             ObjectNode updatedData = objectMapper.createObjectNode();
             updatedData.put("phone", storedPhone);
-            if (customerName != null) updatedData.put("customerName", customerName);
+            if (customerName != null && !customerName.isBlank()) updatedData.put("customerName", customerName);
             if (reservationDate != null) updatedData.put("parsedDate", reservationDate.toString());
-            if (peopleCount != null) updatedData.put("peopleCount", peopleCount);
+            if (peopleCount != null && peopleCount > 0) updatedData.put("peopleCount", peopleCount);
+            if (time != null) updatedData.put("time", time);
             if (motive != null) updatedData.put("motive", motive);
             if (honoree != null) updatedData.put("honoree", honoree);
-            if (time != null) updatedData.put("time", time);
             conversation.setPendingActionData(updatedData.toString());
             conversationRepository.save(conversation);
 
+            // Check completeness
             boolean hasName = customerName != null && !customerName.isBlank();
             boolean hasDate = reservationDate != null;
             boolean hasPeople = peopleCount != null && peopleCount > 0;
-
             boolean hasTime = time != null;
 
+            // If all required fields present, show confirmation summary
             if (hasName && hasDate && hasPeople && hasTime) {
-                return createReservationFromData(conversation, phone);
+                return Optional.of(buildConfirmationSummary(updatedData, phone));
             }
 
+            // Show what was detected and what's missing
             ParsedReservation parsedResponse = new ParsedReservation();
             parsedResponse.customerName = customerName;
             parsedResponse.parsedDate = reservationDate;
@@ -489,17 +470,22 @@ public class ReservationFlowService {
             reservationService.createReservation(req);
             clearPendingAction(conversation);
 
-            String timeInfo = time != null ? " a las " + time : "";
-            String peopleInfo = peopleCount > 0 ? "\n" + peopleCount + " personas" : "";
-            String motiveInfo = motive != null ? "\n" + motive : "";
+            String timeDisplay = time != null ? formatTimeDisplay(time) : "";
+            String dateDisplay = reservationDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
 
             String response = String.format(
-                "¡Reserva confirmada!\n\n%s\nSabado %s%s%s%s\nDeposito: $40.000 COP\n\n¡Te esperamos!",
+                "¡Reserva confirmada! 🎉\n\n" +
+                "👤 %s\n" +
+                "📅 Sábado %s\n" +
+                "%s%s\n" +
+                "💰 Depósito: $40.000 COP\n\n" +
+                "¡Te esperamos en La Montaña del Bendito Chicharrón!\n" +
+                "Recuerda: el depósito de $40.000 se genera automáticamente.",
                 customerName,
-                reservationDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                timeInfo,
-                peopleInfo,
-                motiveInfo
+                dateDisplay,
+                timeDisplay.isEmpty() ? "" : "🕐 " + timeDisplay + "\n",
+                peopleCount > 0 ? "👥 " + peopleCount + " personas" : "",
+                motive != null ? "\n🎂 " + motive : ""
             );
 
             log.info("[ReservationFlow] Reservation created for {} on Saturday {}", customerName, reservationDate);
@@ -510,6 +496,316 @@ public class ReservationFlowService {
             clearPendingAction(conversation);
             return Optional.of("Hubo un error procesando tu reserva. Por favor intenta de nuevo escribiendo *reservar*.");
         }
+    }
+
+    // ── Smart parsing (regex + LLM fallback) ──────────────────────────────
+
+    /**
+     * Intenta extraer datos de reserva usando regex primero (rápido, sin costo).
+     * Si falta algún campo, usa LLM como fallback.
+     * Retorna un ParsedReservation con todos los campos disponibles.
+     */
+    private ParsedReservation smartParse(String message, String displayName) {
+        ParsedReservation parsed = new ParsedReservation();
+        parsed.customerName = displayName;
+
+        String normalized = message.trim().toLowerCase();
+
+        // 1. Intentar regex primero (rápido, sin costo de API)
+        parsed.dayNameMentioned = detectDayName(normalized);
+        parsed.mananaNotSaturday = isMananaMentioned(normalized) && !isMananaSaturday();
+        parsed.parsedDate = parseDateFromText(normalized);
+
+        Integer parsedPeople = parsePeopleCount(normalized, normalized);
+        parsed.peopleCount = parsedPeople != null ? parsedPeople : 0;
+        parsed.time = parseTime(normalized, normalized);
+        parsed.motive = parseMotive(normalized);
+
+        // 2. Detectar nombre del mensaje
+        String detectedName = detectNameFromText(normalized, message);
+        if (detectedName != null) {
+            parsed.customerName = detectedName;
+        }
+
+        // 3. Verificar si regex extrajo todo lo necesario
+        boolean hasDate = parsed.parsedDate != null;
+        boolean hasPeople = parsed.peopleCount > 0;
+        boolean hasTime = parsed.time != null;
+        boolean hasName = parsed.customerName != null && !parsed.customerName.isBlank();
+
+        // Si regex extrajo todo, retornar sin llamar LLM
+        if (hasDate && hasPeople && hasTime && hasName) {
+            log.info("[ReservationFlow] Regex extracted all fields, skipping LLM");
+            return parsed;
+        }
+
+        // 4. Si falta algún campo, usar LLM como fallback
+        log.info("[ReservationFlow] Regex missing fields (date={}, people={}, time={}, name={}), trying LLM",
+                hasDate, hasPeople, hasTime, hasName);
+
+        try {
+            Map<String, Object> llmData = aiService.extractReservationData(message);
+
+            // 5. Merge: regex tiene prioridad sobre LLM (más confiable)
+            if (!hasDate && llmData.containsKey("date")) {
+                String dateStr = (String) llmData.get("date");
+                if (dateStr != null && !dateStr.isBlank()) {
+                    try {
+                        LocalDate llmDate = LocalDate.parse(dateStr);
+                        if (llmDate.getDayOfWeek() == DayOfWeek.SATURDAY) {
+                            parsed.parsedDate = llmDate;
+                        }
+                    } catch (Exception e) {
+                        log.warn("[ReservationFlow] LLM returned invalid date: {}", dateStr);
+                    }
+                }
+            }
+
+            if (parsed.peopleCount == 0 && llmData.containsKey("peopleCount")) {
+                Object countObj = llmData.get("peopleCount");
+                if (countObj instanceof Number num && num.intValue() > 0) {
+                    parsed.peopleCount = num.intValue();
+                }
+            }
+
+            if (parsed.time == null && llmData.containsKey("time")) {
+                String timeStr = (String) llmData.get("time");
+                if (timeStr != null && isValidTime(timeStr)) {
+                    parsed.time = timeStr;
+                }
+            }
+
+            if ((parsed.customerName == null || parsed.customerName.isBlank()) && llmData.containsKey("customerName")) {
+                String name = (String) llmData.get("customerName");
+                if (name != null && !name.isBlank()) {
+                    parsed.customerName = name;
+                }
+            }
+
+            if (parsed.motive == null && llmData.containsKey("motive")) {
+                String motive = (String) llmData.get("motive");
+                if (motive != null && !motive.isBlank()) {
+                    parsed.motive = motive;
+                }
+            }
+
+            if (parsed.honoree == null && llmData.containsKey("honoree")) {
+                String honoree = (String) llmData.get("honoree");
+                if (honoree != null && !honoree.isBlank()) {
+                    parsed.honoree = honoree;
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("[ReservationFlow] LLM extraction failed: {}", e.getMessage());
+        }
+
+        return parsed;
+    }
+
+    // ── Interruption handling (questions during reservation) ──────────────
+
+    /**
+     * Detecta si el mensaje es una pregunta durante el flujo de reserva.
+     * Responde la pregunta y pide confirmar si continuar con la reserva.
+     * NO limpia el pendingAction.
+     */
+    private Optional<String> handleInterruption(ConversationEntity conversation, String message, String phone, String displayName) {
+        String normalized = message.trim().toLowerCase();
+
+        // Detectar si es una pregunta clara
+        boolean isQuestion = normalized.contains("?") || normalized.contains("¿");
+
+        // Detectar si es un saludo o mensaje vacío
+        boolean isGreeting = normalized.equals("hola") || normalized.equals("buenos dias") ||
+                normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
+                normalized.equals("buen dia") || normalized.equals("ok") || normalized.equals("gracias") ||
+                normalized.equals("entendido") || normalized.equals("va") || normalized.equals("dale");
+
+        // Detectar si es una confirmación/cancelación explícita
+        boolean isExplicitConfirm = normalized.equals("si") || normalized.equals("sí");
+        boolean isExplicitCancel = normalized.equals("no") || normalized.contains("cancelar") ||
+                normalized.contains("eliminar") || normalized.contains("olvídelo") || normalized.contains("olvídalo");
+
+        // Si es confirmación o cancelación, dejar que handleCollecting lo procese
+        if (isExplicitConfirm || isExplicitCancel) {
+            return Optional.empty();
+        }
+
+        // Si es un saludo o mensaje vacío, mantener el flujo y pedir datos faltantes
+        if (isGreeting || normalized.isBlank()) {
+            ObjectNode data = readData(conversation);
+            ParsedReservation current = dataToParsed(data, displayName);
+            return Optional.of(buildCollectingMessageWithNote(current,
+                    "¿Sigo con tu reserva? Envíame los datos que faltan."));
+        }
+
+        // Si es una pregunta, responder y pedir que confirme si sigue
+        if (isQuestion) {
+            log.info("[ReservationFlow] Question detected during reservation flow - answering and preserving flow");
+
+            // Leer datos actuales
+            ObjectNode data = readData(conversation);
+            ParsedReservation current = dataToParsed(data, displayName);
+
+            // Construir resumen de datos actuales
+            StringBuilder statusNote = new StringBuilder();
+            statusNote.append("¿Sigo con tu reserva?\n\n");
+
+            if (current.parsedDate != null || current.peopleCount > 0 || current.time != null || current.customerName != null) {
+                statusNote.append("📝 Detecté:\n");
+                if (current.parsedDate != null) {
+                    statusNote.append("- Fecha: Sábado ").append(current.parsedDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))).append("\n");
+                }
+                if (current.peopleCount > 0) {
+                    statusNote.append("- Personas: ").append(current.peopleCount).append("\n");
+                }
+                if (current.time != null) {
+                    statusNote.append("- Hora: ").append(current.time).append("\n");
+                }
+                if (current.customerName != null && !current.customerName.isBlank()) {
+                    statusNote.append("- Nombre: ").append(current.customerName).append("\n");
+                }
+                if (current.motive != null) {
+                    statusNote.append("- Motivo: ").append(current.motive).append("\n");
+                }
+                if (current.honoree != null) {
+                    statusNote.append("- Homenajeado: ").append(current.honoree).append("\n");
+                }
+            }
+
+            statusNote.append("\n⏳ Falta:\n");
+            if (current.parsedDate == null) statusNote.append("- *Fecha* (solo sábados)\n");
+            if (current.peopleCount == 0) statusNote.append("- *Número de personas*\n");
+            if (current.time == null) statusNote.append("- *Hora* (11:30, 12:00, 12:30 o 1:00 PM)\n");
+            if (current.customerName == null || current.customerName.isBlank()) statusNote.append("- *Tu nombre*\n");
+
+            statusNote.append("\nRespondo tu pregunta y luego continuamos con la reserva.");
+
+            // Retornar marcador especial para que el pipeline responda la pregunta
+            // y luego el handleCollecting continúe
+            return Optional.of("__INTERRUPTION__" + statusNote.toString());
+        }
+
+        // Si no es pregunta ni confirmación ni cancelación, podría ser datos de reserva
+        return Optional.empty();
+    }
+
+    /**
+     * Convierte los datos JSON del conversation a un ParsedReservation.
+     */
+    private ParsedReservation dataToParsed(ObjectNode data, String displayName) {
+        ParsedReservation parsed = new ParsedReservation();
+        parsed.customerName = data.has("customerName") && !data.get("customerName").asText().isBlank()
+                ? data.get("customerName").asText() : displayName;
+        if (data.has("parsedDate") && !data.get("parsedDate").isNull()) {
+            try { parsed.parsedDate = LocalDate.parse(data.get("parsedDate").asText()); } catch (Exception ignored) {}
+        }
+        parsed.peopleCount = data.has("peopleCount") ? data.get("peopleCount").asInt() : 0;
+        parsed.time = data.has("time") && !data.get("time").isNull() ? data.get("time").asText() : null;
+        parsed.motive = data.has("motive") && !data.get("motive").isNull() ? data.get("motive").asText() : null;
+        parsed.honoree = data.has("honoree") && !data.get("honoree").isNull() ? data.get("honoree").asText() : null;
+        return parsed;
+    }
+
+    // ── Confirmation summary ─────────────────────────────────────────────
+
+    /**
+     * Construye un resumen completo de la reserva para confirmación.
+     */
+    private String buildConfirmationSummary(ObjectNode data, String phone) {
+        String customerName = data.has("customerName") ? data.get("customerName").asText() : "N/A";
+        String dateStr = data.has("parsedDate") ? data.get("parsedDate").asText() : null;
+        int peopleCount = data.has("peopleCount") ? data.get("peopleCount").asInt() : 0;
+        String time = data.has("time") && !data.get("time").isNull() ? data.get("time").asText() : null;
+        String motive = data.has("motive") && !data.get("motive").isNull() ? data.get("motive").asText() : null;
+        String honoree = data.has("honoree") && !data.get("honoree").isNull() ? data.get("honoree").asText() : null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("¡Perfecto! Resumen de tu reserva:\n\n");
+
+        if (dateStr != null) {
+            try {
+                LocalDate date = LocalDate.parse(dateStr);
+                sb.append("📅 Fecha: Sábado ").append(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))).append("\n");
+            } catch (Exception e) {
+                sb.append("📅 Fecha: ").append(dateStr).append("\n");
+            }
+        }
+
+        if (time != null) {
+            sb.append("🕐 Hora: ").append(formatTimeDisplay(time)).append("\n");
+        }
+
+        if (peopleCount > 0) {
+            sb.append("👥 Personas: ").append(peopleCount).append("\n");
+        }
+
+        if (customerName != null && !customerName.isBlank()) {
+            sb.append("👤 Nombre: ").append(customerName).append("\n");
+        }
+
+        if (motive != null) {
+            sb.append("🎂 Motivo: ").append(motive).append("\n");
+        }
+
+        if (honoree != null && !"N/A".equals(honoree)) {
+            sb.append("🎉 Homenajeado: ").append(honoree).append("\n");
+        }
+
+        sb.append("\n💰 Depósito: $40.000 COP\n");
+        sb.append("\n¿Confirmo esta reserva? Responde *SI* o *NO*");
+
+        return sb.toString();
+    }
+
+    /**
+     * Formatea la hora para mostrar de forma amigable.
+     */
+    private String formatTimeDisplay(String time) {
+        if (time == null) return "";
+        try {
+            String[] parts = time.split(":");
+            int hour = Integer.parseInt(parts[0]);
+            int min = Integer.parseInt(parts[1]);
+            String period = hour >= 12 ? "PM" : "AM";
+            int displayHour = hour > 12 ? hour - 12 : hour;
+            if (displayHour == 0) displayHour = 12;
+            return String.format("%d:%02d %s", displayHour, min, period);
+        } catch (Exception e) {
+            return time;
+        }
+    }
+
+    /**
+     * Construye mensaje de recolección con nota adicional.
+     */
+    private String buildCollectingMessageWithNote(ParsedReservation parsed, String note) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(buildCollectingMessage(parsed));
+        sb.append("\n\n").append(note);
+        return sb.toString();
+    }
+
+    /**
+     * Construye mensaje cuando el usuario confirma con SI pero faltan datos.
+     */
+    private String buildConfirmationSummaryWithMissing(ObjectNode data) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Falta información para completar la reserva:\n\n");
+
+        boolean hasName = data.has("customerName") && !data.get("customerName").asText().isBlank();
+        boolean hasDate = data.has("parsedDate") && !data.get("parsedDate").isNull();
+        boolean hasPeople = data.has("peopleCount") && data.get("peopleCount").asInt() > 0;
+        boolean hasTime = data.has("time") && !data.get("time").isNull();
+
+        if (!hasName) sb.append("- Tu *nombre completo*\n");
+        if (!hasDate) sb.append("- *Fecha* (solo sábados)\n");
+        if (!hasPeople) sb.append("- *Número de personas*\n");
+        if (!hasTime) sb.append("- *Hora* (11:30, 12:00, 12:30 o 1:00 PM)\n");
+
+        sb.append("\nEnvíame esos datos y confirmo tu reserva.");
+        return sb.toString();
     }
 
     // ── Parsing helpers ────────────────────────────────────────────────
@@ -554,9 +850,9 @@ public class ReservationFlowService {
         LocalDate nextSat = findNextSaturday();
         return String.format(
             "Los *%s* no hacemos reservas.\n\n" +
-            "Solo hacemos reservas los sabados.\n\n" +
-            "El proximo sabado es: *%s*\n\n" +
-            "Deseas reservar para ese dia? Responde *SI* o *NO*, o envia los datos de tu reserva.",
+            "Solo hacemos reservas los sábados.\n\n" +
+            "El próximo sábado es: *%s*\n\n" +
+            "¿Deseas reservar para ese día? Responde *SI* o *NO*, o envía los datos de tu reserva.",
             dayName + "s",
             nextSat.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
         );
@@ -564,34 +860,35 @@ public class ReservationFlowService {
 
     private String buildCollectingMessage(ParsedReservation parsed) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Detecte los siguientes datos:\n\n");
+        sb.append("📝 Reserva en progreso:\n\n");
 
+        // Show what was detected
+        sb.append("✅ Detectado:\n");
         if (parsed.customerName != null && !parsed.customerName.isBlank()) {
-            sb.append("Nombre: ").append(parsed.customerName).append("\n");
+            sb.append("- Nombre: ").append(parsed.customerName).append("\n");
         }
         if (parsed.parsedDate != null) {
-            sb.append("Fecha: sabado ")
+            sb.append("- Fecha: Sábado ")
               .append(parsed.parsedDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))).append("\n");
         }
-        if (parsed.peopleCount > 0) sb.append("Personas: ").append(parsed.peopleCount).append("\n");
-        if (parsed.motive != null) sb.append("Motivo: ").append(parsed.motive).append("\n");
-        if (parsed.honoree != null) sb.append("Homenajeado: ").append(parsed.honoree).append("\n");
-        if (parsed.time != null) sb.append("Hora: ").append(parsed.time).append("\n");
+        if (parsed.peopleCount > 0) sb.append("- Personas: ").append(parsed.peopleCount).append("\n");
+        if (parsed.time != null) sb.append("- Hora: ").append(formatTimeDisplay(parsed.time)).append("\n");
+        if (parsed.motive != null) sb.append("- Motivo: ").append(parsed.motive).append("\n");
+        if (parsed.honoree != null) sb.append("- Homenajeado: ").append(parsed.honoree).append("\n");
 
-        sb.append("\nFalta información para completar la reserva.\n");
-        sb.append("\n¿Qué falta?");
-
+        // Show what's missing
+        sb.append("\n⏳ Falta:\n");
         boolean hasName = parsed.customerName != null && !parsed.customerName.isBlank();
         boolean hasDate = parsed.parsedDate != null;
         boolean hasPeople = parsed.peopleCount > 0;
         boolean hasTime = parsed.time != null;
 
-        if (!hasName) sb.append("\n- Tu *nombre completo*");
-        if (!hasDate) sb.append("\n- *Fecha* (solo sabados)");
-        if (!hasPeople) sb.append("\n- *Numero de personas*");
-        if (!hasTime) sb.append("\n- *Hora* (11:30, 12:00, 12:30 o 13:00)");
+        if (!hasName) sb.append("- *Tu nombre completo*\n");
+        if (!hasDate) sb.append("- *Fecha* (solo sábados)\n");
+        if (!hasPeople) sb.append("- *Número de personas*\n");
+        if (!hasTime) sb.append("- *Hora* (11:30, 12:00, 12:30 o 1:00 PM)\n");
 
-        sb.append("\n\nEnvíalos por favor.");
+        sb.append("\nEnvíame los datos faltantes o pregunta lo que necesites.");
         return sb.toString();
     }
 
