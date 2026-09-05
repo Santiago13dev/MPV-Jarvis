@@ -144,6 +144,7 @@ public class HumanTransferService {
             case "KEYWORD" -> "Claro, te comunico con un asesor ahora mismo. Un momento por favor. 🙋";
             case "FRUSTRATION" -> "Veo que estás molesto/a. Voy a conectarte con un asesor que te pueda ayudar mejor. Un momento. 🙋";
             case "TIMEOUT" -> "Parece que necesitas más ayuda. Te comunico con un asesor humano. Un momento. 🙋";
+            case "AI_OFFER_ACCEPTED" -> "¡Claro! Te comunico con un asesor ahora mismo. Un momento por favor. 🙋";
             default -> "Un asesor te atenderá muy pronto. Un momento por favor. 🙋";
         };
 

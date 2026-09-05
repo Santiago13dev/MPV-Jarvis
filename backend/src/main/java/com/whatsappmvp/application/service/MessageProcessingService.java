@@ -43,6 +43,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MessageProcessingService {
 
+    private static final String ACTION_HUMAN_TRANSFER_OFFERED = "HUMAN_TRANSFER_OFFERED";
+
     private final RateLimitService rateLimitService;
     private final BusinessHoursService businessHoursService;
     private final KeywordMatchingService keywordMatchingService;
@@ -153,6 +155,42 @@ public class MessageProcessingService {
             String cancelMsg = reservationFlowService.startCancelFlow(conversation, phone);
             sendAndPersistResponse(conversation, remoteJid, cancelMsg, ProcessedBy.SYSTEM, 0);
             return;
+        }
+
+        // ── PASO 5.45: Responder a oferta de asesor ──────────────────────────
+        // Si la IA ofreció conectar con asesor y el cliente dice "si", ejecutar transferencia real
+        if (ACTION_HUMAN_TRANSFER_OFFERED.equals(conversation.getPendingAction())) {
+            boolean isAccept = normalizedContent.equals("si") || normalizedContent.equals("sí") ||
+                    normalizedContent.equals("dale") || normalizedContent.equals("ok") ||
+                    normalizedContent.equals("claro") || normalizedContent.equals("por favor") ||
+                    normalizedContent.equals("si por favor") || normalizedContent.equals("sí por favor") ||
+                    normalizedContent.startsWith("si ") || normalizedContent.startsWith("sí ");
+            boolean isReject = normalizedContent.equals("no") || normalizedContent.equals("no gracias") ||
+                    normalizedContent.contains("no quiero") || normalizedContent.contains("olvídalo") ||
+                    normalizedContent.contains("olvidalo");
+
+            if (isAccept) {
+                log.info("[Pipeline] User accepted human transfer offer → executing transfer");
+                conversation.setPendingAction(null);
+                conversation.setPendingActionData(null);
+                conversationRepository.save(conversation);
+                humanTransferService.transferToHuman(conversation, remoteJid, "AI_OFFER_ACCEPTED", content);
+                return;
+            } else if (isReject) {
+                log.info("[Pipeline] User rejected human transfer offer → clearing pending action");
+                conversation.setPendingAction(null);
+                conversation.setPendingActionData(null);
+                conversationRepository.save(conversation);
+                sendAndPersistResponse(conversation, remoteJid,
+                        "¡Perfecto! Sigo aquí para ayudarte con lo que necesites. 😊",
+                        ProcessedBy.SYSTEM, 0);
+                return;
+            }
+            // If neither accept nor reject, clear the pending action and continue normal pipeline
+            log.info("[Pipeline] Clearing HUMAN_TRANSFER_OFFERED pending action (unrecognized response)");
+            conversation.setPendingAction(null);
+            conversation.setPendingActionData(null);
+            conversationRepository.save(conversation);
         }
 
         // ── PASO 5.5: Si hay una acción pendiente (reserva en curso) ────────
@@ -297,6 +335,20 @@ public class MessageProcessingService {
             try {
                 OpenAIServiceClient.OpenAIResult aiResult = aiService.generateResponse(conversation.getId(), content);
                 sendAndPersistResponse(conversation, remoteJid, aiResult.getText(), ProcessedBy.AI, aiResult.getTokensUsed());
+
+                // ── PASO 9.05: Si la IA ofreció un asesor, trackear la oferta ──
+                String aiResponseLower = aiResult.getText().toLowerCase();
+                boolean offeredAdvisor = aiResponseLower.contains("asesor") ||
+                        aiResponseLower.contains("conecte con") || aiResponseLower.contains("conectarte con") ||
+                        aiResponseLower.contains("comunico con") || aiResponseLower.contains("comunicarte con") ||
+                        aiResponseLower.contains("hablar con") || aiResponseLower.contains("persona del restaurante");
+
+                if (offeredAdvisor) {
+                    log.info("[Pipeline] AI offered human transfer → setting HUMAN_TRANSFER_OFFERED pending action");
+                    conversation.setPendingAction(ACTION_HUMAN_TRANSFER_OFFERED);
+                    conversation.setPendingActionData("{\"offer\":true}");
+                    conversationRepository.save(conversation);
+                }
 
                 // ── PASO 9.1: Verificar sentimiento después de responder ────────
                 List<Map<String, String>> history = new ArrayList<>();
