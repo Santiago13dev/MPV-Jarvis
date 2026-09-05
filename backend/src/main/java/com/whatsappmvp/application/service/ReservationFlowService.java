@@ -42,7 +42,18 @@ public class ReservationFlowService {
     }
 
     public boolean hasPendingAction(ConversationEntity conversation) {
-        return conversation.getPendingAction() != null && !conversation.getPendingAction().isBlank();
+        if (conversation.getPendingAction() == null || conversation.getPendingAction().isBlank()) return false;
+        // Auto-expirar acciones pendientes mayores a 30 minutos
+        if (conversation.getLastMessageAt() != null) {
+            long minutesSinceLastMessage = java.time.Duration.between(
+                conversation.getLastMessageAt(), LocalDateTime.now()).toMinutes();
+            if (minutesSinceLastMessage > 30) {
+                log.info("[ReservationFlow] Pending action expired ({} min since last message)", minutesSinceLastMessage);
+                clearPendingAction(conversation);
+                return false;
+            }
+        }
+        return true;
     }
 
     @Transactional
@@ -751,7 +762,29 @@ public class ReservationFlowService {
         // Preguntas claras (contienen ? o ¿)
         if (normalized.contains("?") || normalized.contains("¿")) return true;
 
-        // NO descartar si contiene datos de reserva válidos
+        // Saludos claros
+        if (normalized.equals("hola") || normalized.equals("buenos dias") ||
+            normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
+            normalized.equals("buen dia")) return true;
+
+        // Palabras que indican que NO es datos de reserva sino conversación/preguntas
+        String[] nonDataPhrases = {
+            "puedo", "quiero", "necesito", "tienen", "tienen?", "hay", "como",
+            "donde", "dónde", "cuando", "cuánto", "cuanto", "que", "qué",
+            "habla", "dame", "envia", "envíame", "puedo llevar", "se puede",
+            "aceptan", "aceptan?", "disponen", "manejan", "trabajan", "atenden",
+            "baño", "baños", "parqueadero", "mascota", "mascotas", "wifi",
+            "musica", "música", "decoracion", "decoración"
+        };
+        for (String phrase : nonDataPhrases) {
+            if (normalized.equals(phrase) || normalized.startsWith(phrase + " ") ||
+                normalized.contains(phrase + " ") || normalized.contains(phrase + "?") ||
+                normalized.contains(phrase + "¿")) {
+                return true;
+            }
+        }
+
+        // Tiene datos parseables de reserva → SÍ es reserva
         if (normalized.matches(".*\\d{1,2}[/\\-]\\d{1,2}[/\\-]\\d{4}.*")) return false;
         if (normalized.matches(".*\\d{1,2}\\s*:\\s*\\d{2}.*")) return false;
         if (normalized.matches(".*las?\\s+\\d{1,2}.*")) return false;
@@ -761,23 +794,12 @@ public class ReservationFlowService {
             normalized.contains("de la tarde") || normalized.contains("de la mañana") ||
             normalized.contains("de la manana")) return false;
 
-        // Saludos claros
-        if (normalized.equals("hola") || normalized.equals("buenos dias") ||
-            normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
-            normalized.equals("buen dia") || normalized.equals("buenos dias")) return true;
+        // Tiene "personas" + número → reserva
+        if (normalized.contains("personas") && normalized.matches(".*\\d+.*")) return false;
+        if (normalized.contains("somos") && normalized.matches(".*\\d+.*")) return false;
 
-        // Solo descartar si es muy corto (1 palabra) y no contiene datos
-        String[] words = normalized.split("\\s+");
-        if (words.length == 1) {
-            // Una sola palabra: solo descartar si NO es un dato numérico
-            if (parsePeopleCount(normalized, normalized) != null) return false;
-            if (parseDateFromText(normalized) != null) return false;
-            if (parseTime(normalized, normalized) != null) return false;
-            return true;
-        }
-
-        // Mensajes de 2+ palabras: asumir que SÍ son datos/conversación de reserva
-        return false;
+        // Por defecto: no es datos de reserva
+        return true;
     }
 
     private LocalTime parseTimeToLocalTime(String timeStr) {
