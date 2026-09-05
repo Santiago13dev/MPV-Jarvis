@@ -144,15 +144,8 @@ public class MessageProcessingService {
             return;
         }
 
-        // ── PASO 5.5: Reservar — iniciar flujo SIEMPRE (antes de FAQs) ───────
-        if (isReservationIntent(normalizedContent)) {
-            log.info("[Pipeline] RESERVATION trigger → starting reservation flow");
-            String resMsg = reservationFlowService.startFlow(conversation, content, displayName);
-            sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0);
-            return;
-        }
-
-        // ── PASO 5.6: Si hay una acción pendiente (reserva en curso) ────────
+        // ── PASO 5.5: Si hay una acción pendiente (reserva en curso) ────────
+        // PRIMERO verificar si hay reserva pendiente, ANTES de detectar nueva reserva
         if (reservationFlowService.hasPendingAction(conversation)) {
             log.info("[Pipeline] Pending reservation action detected → handling step");
             var stepResponse = reservationFlowService.handleStep(conversation, content, phone, displayName);
@@ -161,6 +154,14 @@ public class MessageProcessingService {
                 return;
             }
             // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
+        }
+
+        // ── PASO 5.6: Reservar — iniciar flujo (solo si NO hay reserva pendiente) ──
+        if (isReservationIntent(normalizedContent)) {
+            log.info("[Pipeline] RESERVATION trigger → starting reservation flow");
+            String resMsg = reservationFlowService.startFlow(conversation, content, displayName);
+            sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0);
+            return;
         }
 
         // ── PASO 5.65: Solicitud de menú — enviar PDF ─────────────────────────

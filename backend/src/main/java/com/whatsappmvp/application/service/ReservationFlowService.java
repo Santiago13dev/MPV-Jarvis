@@ -186,6 +186,14 @@ public class ReservationFlowService {
             return Optional.of("¡Perfecto! Si necesitas algo más, estoy aquí.");
         }
 
+        // Detectar si el mensaje NO es datos de reserva (preguntas, conversación general)
+        // Si el usuario hace una pregunta o dice algo no relacionado, limpiar la acción pendiente
+        if (isNotReservationData(normalized)) {
+            log.info("[ReservationFlow] Message is not reservation data, clearing pending action");
+            clearPendingAction(conversation);
+            return Optional.empty(); // Dejar que el pipeline normal maneje el mensaje
+        }
+
         try {
             ObjectNode dataNode = readData(conversation);
 
@@ -699,6 +707,54 @@ public class ReservationFlowService {
         if (lower.contains("amigos") || lower.contains("amigo")) return "Reunión de amigos";
         if (lower.contains("negocio") || lower.contains("trabajo")) return "Reunión de negocios";
         return null;
+    }
+
+    /**
+     * Detecta si un mensaje NO es datos de reserva.
+     * Retorna true si el mensaje es claramente una pregunta, conversación general,
+     * o algo no relacionado con datos de reserva.
+     */
+    private boolean isNotReservationData(String normalized) {
+        // Preguntas
+        if (normalized.contains("?") || normalized.contains("¿")) return true;
+
+        // Palabras clave de preguntas/conversación
+        String[] questionPatterns = {
+            "puedo", "puede", "pueden", "puedes",
+            "tienen", "tienen?", "hay", "hay?",
+            "como", "cómo", "cuando", "cuándo", "donde", "dónde",
+            "que", "qué", "cuanto", "cuánto",
+            "quiero saber", "me gustaria", "me gustaría",
+            "necesito saber", "dime", "cuéntame", "cuentame",
+            "gracias", "por favor",
+            "Hola", "hola", "buenos", "buenas",
+            "ok", "vale", "entendido",
+            "pero", "o sea", "osea",
+            "llueve", "lluvia", "clima",
+            "torta", "llevar torta", "puedo llevar",
+            "perro", "perros", "perrito", "mascota",
+            "reservar", "reserva", "reservación",
+            "ayuda", "help"
+        };
+
+        for (String pattern : questionPatterns) {
+            if (normalized.contains(pattern)) {
+                // Si contiene patrón de pregunta pero TAMBIÉN tiene datos de reserva
+                // (números de personas, fechas, horas), no limpiar
+                boolean hasData = parsePeopleCount(normalized, normalized) != null ||
+                                  parseDateFromText(normalized) != null ||
+                                  parseTime(normalized, normalized) != null;
+                if (!hasData) return true;
+            }
+        }
+
+        // Mensajes muy cortos (1-2 palabras) sin datos numéricos
+        String[] words = normalized.split("\\s+");
+        if (words.length <= 2 && parsePeopleCount(normalized, normalized) == null) {
+            return true;
+        }
+
+        return false;
     }
 
     private LocalTime parseTimeToLocalTime(String timeStr) {
