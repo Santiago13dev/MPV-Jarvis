@@ -469,6 +469,10 @@ public class MessageProcessingService {
         if (normalizedContent == null || normalizedContent.isBlank()) return false;
         return normalizedContent.contains("ubicacion") ||
                normalizedContent.contains("ubicación") ||
+               normalizedContent.contains("ubican") ||
+               normalizedContent.contains("ubicada") ||
+               normalizedContent.contains("encuentran") ||
+               normalizedContent.contains("encuentra") ||
                normalizedContent.contains("dónde están") ||
                normalizedContent.contains("donde estan") ||
                normalizedContent.contains("donde esta") ||
@@ -480,6 +484,7 @@ public class MessageProcessingService {
                normalizedContent.contains("dirección") ||
                normalizedContent.contains("direccion") ||
                normalizedContent.contains("quedan") ||
+               normalizedContent.contains("queda") ||
                normalizedContent.contains("location");
     }
 
