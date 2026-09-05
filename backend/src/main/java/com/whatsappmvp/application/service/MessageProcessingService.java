@@ -522,12 +522,11 @@ public class MessageProcessingService {
         String introMessage = "📋 ¡Claro! Aquí tienes nuestro menú completo. 🍽️";
         sendAndPersistResponse(conversation, remoteJid, introMessage, ProcessedBy.SYSTEM, 0);
 
-        // Construir URL del PDF
-        String pdfUrl = props.getUploads().getBaseUrl().replace("/uploads", "")
-                + "/menu-bendito-chicharron.pdf";
+        // Ruta local del PDF dentro del container whatsapp-service
+        String pdfPath = "/app/public/menu-bendito-chicharron.pdf";
 
         try {
-            whatsAppClient.sendDocument(targetJid, pdfUrl, "Menu-Bendito-Chicharron.pdf", "application/pdf");
+            whatsAppClient.sendDocument(targetJid, pdfPath, "Menu-Bendito-Chicharron.pdf", "application/pdf");
             log.info("[Pipeline] Menu PDF sent to {}", targetJid);
         } catch (Exception e) {
             log.error("[Pipeline] Failed to send menu PDF to {}: {}", targetJid, e.getMessage());

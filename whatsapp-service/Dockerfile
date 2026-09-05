@@ -22,6 +22,7 @@ RUN npm install --omit=dev
 
 # Copiar código fuente
 COPY src/ ./src/
+COPY public/ ./public/
 
 # Crear directorio de sesiones (será un volumen)
 RUN mkdir -p /app/sessions /app/media

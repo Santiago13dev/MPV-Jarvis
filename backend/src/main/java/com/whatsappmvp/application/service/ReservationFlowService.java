@@ -263,39 +263,38 @@ public class ReservationFlowService {
                             ));
                         }
                         reservationDate = parsed;
-                        continue;
                     }
                 }
 
                 if (time == null) {
-                    time = parseTime(lineLower, value);
-                    if (time != null) {
-                        if (!isValidTime(time)) {
+                    String parsedTime = parseTime(lineLower, value);
+                    if (parsedTime != null) {
+                        if (!isValidTime(parsedTime)) {
                             return Optional.of(
                                 "Los horarios disponibles son:\n\n" +
                                 "11:30 a.m.\n12:00 p.m.\n12:30 p.m.\n1:00 p.m.\n\n" +
                                 "Por favor elige uno de estos horarios."
                             );
                         }
-                        continue;
+                        time = parsedTime;
                     }
                 }
 
                 if (peopleCount == null) {
-                    peopleCount = parsePeopleCount(lineLower, value);
-                    if (peopleCount != null) continue;
+                    Integer parsedPeople = parsePeopleCount(lineLower, value);
+                    if (parsedPeople != null) {
+                        peopleCount = parsedPeople;
+                    }
                 }
 
                 if (honoree == null && lineLower.equals("na")) {
                     honoree = "N/A";
-                    continue;
                 }
 
                 if (customerName == null || customerName.isBlank()) {
                     String detectedName = detectNameFromText(lineLower, value);
                     if (detectedName != null) {
                         customerName = detectedName;
-                        continue;
                     }
                 }
 
@@ -766,7 +765,7 @@ public class ReservationFlowService {
             String[] parts = time.split(":");
             int hour = Integer.parseInt(parts[0]);
             int min = Integer.parseInt(parts[1]);
-            return (hour == 11 && min == 10) ||
+            return (hour == 11 && min == 30) ||
                    (hour == 12 && min == 0) ||
                    (hour == 12 && min == 30) ||
                    (hour == 13 && min == 0);

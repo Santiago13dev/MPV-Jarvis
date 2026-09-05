@@ -390,16 +390,27 @@ async function sendImageMessage(to, imageUrl, caption = '') {
 
 /**
  * Enviar documento/PDF
- * Descarga el archivo primero, luego envía como buffer (más confiable)
+ * Si docUrl es una ruta local (empieza con / o file://), lee de disco.
+ * Si es URL HTTP, descarga primero.
  */
 async function sendDocumentMessage(to, docUrl, filename, mimetype = 'application/pdf') {
   if (!sock || sessionStatus !== 'CONNECTED') throw new Error('WhatsApp not connected');
   const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
 
-  // Descargar el archivo primero
-  const axios = require('axios');
-  const response = await axios.get(docUrl, { responseType: 'arraybuffer', timeout: 15000 });
-  const buffer = Buffer.from(response.data);
+  let buffer;
+  const fs = require('fs');
+  const path = require('path');
+
+  if (docUrl.startsWith('/') || docUrl.startsWith('file://') || docUrl.startsWith('./')) {
+    // Ruta local — leer directo del disco
+    const filePath = docUrl.startsWith('file://') ? docUrl.replace('file://', '') : docUrl;
+    buffer = fs.readFileSync(filePath);
+  } else {
+    // URL HTTP — descargar
+    const axios = require('axios');
+    const response = await axios.get(docUrl, { responseType: 'arraybuffer', timeout: 15000 });
+    buffer = Buffer.from(response.data);
+  }
 
   const result = await sock.sendMessage(jid, {
     document: buffer,
