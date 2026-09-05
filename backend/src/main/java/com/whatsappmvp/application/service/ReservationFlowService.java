@@ -474,7 +474,7 @@ public class ReservationFlowService {
             String motiveInfo = motive != null ? "\n" + motive : "";
 
             String response = String.format(
-                "¡Reserva confirmada!\n\n%s\nSabado %s%s%s\nDeposito: $40.000 COP\n\n¡Te esperamos!",
+                "¡Reserva confirmada!\n\n%s\nSabado %s%s%s%s\nDeposito: $40.000 COP\n\n¡Te esperamos!",
                 customerName,
                 reservationDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
                 timeInfo,
