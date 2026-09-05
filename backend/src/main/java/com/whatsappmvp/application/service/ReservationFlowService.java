@@ -385,7 +385,7 @@ public class ReservationFlowService {
         String normalized = content != null ? content.trim().toLowerCase() : "";
 
         // Parsear cantidad de personas del mensaje
-        Integer newPeopleCount = parsePeopleCount(normalized);
+        Integer newPeopleCount = parsePeopleCount(normalized, normalized);
 
         if (newPeopleCount != null && newPeopleCount > 0) {
             try {
