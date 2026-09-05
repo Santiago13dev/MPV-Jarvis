@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Propuesta Web - Alexandra Ariza Abogada</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #fff;
+        }
+        .page {
+            max-width: 210mm;
+            margin: 0 auto;
+            padding: 40px 50px;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #1a365d;
+            padding-bottom: 30px;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            color: #1a365d;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        .header .subtitle {
+            color: #4a5568;
+            font-size: 16px;
+        }
+        .header .date {
+            color: #718096;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .section {
+            margin-bottom: 35px;
+        }
+        .section h2 {
+            color: #1a365d;
+            font-size: 20px;
+            border-left: 4px solid #2b6cb0;
+            padding-left: 15px;
+            margin-bottom: 20px;
+        }
+        .section h3 {
+            color: #2d3748;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        .section p {
+            color: #4a5568;
+            margin-bottom: 15px;
+        }
+        .highlight-box {
+            background: #ebf8ff;
+            border: 1px solid #bee3f8;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .highlight-box strong {
+            color: #1a365d;
+        }
+        .services-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .service-card {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .service-card h4 {
+            color: #1a365d;
+            font-size: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .service-card h4::before {
+            content: "✓";
+            color: #2b6cb0;
+            font-weight: bold;
+        }
+        .service-card p {
+            color: #718096;
+            font-size: 13px;
+            margin: 0;
+        }
+        .service-card .price {
+            color: #2b6cb0;
+            font-weight: bold;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        th {
+            background: #1a365d;
+            color: #fff;
+            font-weight: 600;
+        }
+        tr:nth-child(even) {
+            background: #f7fafc;
+        }
+        .total-row {
+            background: #ebf8ff !important;
+            font-weight: bold;
+        }
+        .total-row td {
+            color: #1a365d;
+            font-size: 18px;
+        }
+        .timeline {
+            margin: 20px 0;
+        }
+        .timeline-item {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .timeline-week {
+            background: #1a365d;
+            color: #fff;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .timeline-content h4 {
+            color: #2d3748;
+            font-size: 15px;
+            margin-bottom: 5px;
+        }
+        .timeline-content p {
+            color: #718096;
+            font-size: 13px;
+            margin: 0;
+        }
+        .footer {
+            margin-top: 50px;
+            padding-top: 30px;
+            border-top: 2px solid #e2e8f0;
+            text-align: center;
+        }
+        .footer .company {
+            color: #1a365d;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .footer .contact-info {
+            color: #718096;
+            font-size: 14px;
+        }
+        .badge {
+            display: inline-block;
+            background: #2b6cb0;
+            color: #fff;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .note {
+            background: #fefcbf;
+            border: 1px solid #faf089;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 13px;
+        }
+        @media print {
+            .page {
+                padding: 20px 30px;
+            }
+            .no-print {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <!-- HEADER -->
+        <div class="header">
+            <h1>PROPUESTA COMERCIAL</h1>
+            <div class="subtitle">Rediseño Web y Soluciones Digitales para Firma Jurídica</div>
+            <div class="date">Presentado a: Alexandra Ariza Abogada | Junio 2026</div>
+        </div>
+
+        <!-- INTRODUCCIÓN -->
+        <div class="section">
+            <h2>1. Introducción</h2>
+            <p>Estimada Alexandra,</p>
+            <p>Tras analizar detalladamente su presencia digital actual en <strong>alexandraariza.com.co</strong>, hemos identificado oportunidades significativas para fortalecer su imagen profesional, mejorar la experiencia de sus clientes y aumentar la captación de nuevos casos a través de herramientas tecnológicas estratégicas.</p>
+            <p>Esta propuesta incluye un rediseño web completo, integración de sistemas de gestión y herramientas de marketing digital diseñadas específicamente para el sector jurídico.</p>
+        </div>
+
+        <!-- ANÁLISIS SITUACIÓN ACTUAL -->
+        <div class="section">
+            <h2>2. Análisis de Situación Actual</h2>
+            <div class="highlight-box">
+                <strong>Problemas Identificados:</strong>
+                <ul style="margin-top: 10px; margin-left: 20px; color: #4a5568;">
+                    <li>Diseño web desactualizado (copyright 2022)</li>
+                    <li>Plantilla genérica sin personalización de marca</li>
+                    <li>Inconsistencia en emails de contacto mostrados</li>
+                    <li>Sistema de contacto limitado solo a WhatsApp</li>
+                    <li>Sin sistema de reservas ni citas en línea</li>
+                    <li>Sin pasarela de pagos para consultas</li>
+                    <li>Sin SEO optimizado para Google</li>
+                    <li>Sin blog ni contenido educativo</li>
+                    <li>Sin portal de clientes para seguimiento de casos</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- SERVICIOS PROPUESTOS -->
+        <div class="section">
+            <h2>3. Servicios Propuestos</h2>
+            
+            <div class="services-grid">
+                <div class="service-card">
+                    <h4>Rediseño Web Premium</h4>
+                    <p>Tema personalizado para sector jurídico, diseño responsive moderno, colores profesionales (azul/gris), secciones completas: Inicio, Servicios, Equipo, Casos de Éxito, Blog, Contacto.</p>
+                    <div class="price">$3.500.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Pasarela de Pagos</h4>
+                    <p>Integración con Nequi, Daviplata, Stripe y Wompi. Pagos de consultas en línea, anticipos de honorarios y facturación electrónica automática (DIAN).</p>
+                    <div class="price">$1.200.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Sistema de Reservas</h4>
+                    <p>Calendario integrado para agendar consultas, formulario de intake legal, confirmación automática por WhatsApp/email y recordatorios 24h antes.</p>
+                    <div class="price">$2.000.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>SEO Local Optimizado</h4>
+                    <p>Google My Business, palabras clave estratégicas ("abogada derechos humanos Bogotá"), meta tags, schema markup, sitemap.xml y robots.txt.</p>
+                    <div class="price">$800.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Chatbot WhatsApp Inteligente</h4>
+                    <p>Respuesta automática 24/7, FAQ interactivas, calificación de casos, transferencia a humano cuando es necesario, integración con agenda.</p>
+                    <div class="price">$1.500.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Portal de Clientes</h4>
+                    <p>Acceso restringido para ver estado de casos, documentos subidos, historial de facturación y mensajes directos con el equipo legal.</p>
+                    <div class="price">$2.500.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Blog Jurídico Integrado</h4>
+                    <p>CMS para publicar artículos sobre derechos humanos, noticias legales y casos de éxito. Mejora SEO orgánico y posicionamiento como experta.</p>
+                    <div class="price">$700.000 COP</div>
+                </div>
+                
+                <div class="service-card">
+                    <h4>Facturación Electrónica</h4>
+                    <p>Integración con Siigo o Alegra, notas crédito, retenciones y reportes contables automatizados.</p>
+                    <div class="price">$900.000 COP</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RESUMEN PRESUPUESTO -->
+        <div class="section">
+            <h2>4. Resumen Presupuestal</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Servicio</th>
+                        <th>Inversión</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Rediseño Web Premium</td>
+                        <td>$3.500.000</td>
+                    </tr>
+                    <tr>
+                        <td>Pasarela de Pagos</td>
+                        <td>$1.200.000</td>
+                    </tr>
+                    <tr>
+                        <td>Sistema de Reservas</td>
+                        <td>$2.000.000</td>
+                    </tr>
+                    <tr>
+                        <td>SEO Local Optimizado</td>
+                        <td>$800.000</td>
+                    </tr>
+                    <tr>
+                        <td>Chatbot WhatsApp</td>
+                        <td>$1.500.000</td>
+                    </tr>
+                    <tr>
+                        <td>Portal de Clientes</td>
+                        <td>$2.500.000</td>
+                    </tr>
+                    <tr>
+                        <td>Blog Jurídico</td>
+                        <td>$700.000</td>
+                    </tr>
+                    <tr>
+                        <td>Facturación Electrónica</td>
+                        <td>$900.000</td>
+                    </tr>
+                    <tr class="total-row">
+                        <td>TOTAL INVERSIÓN ÚNICA</td>
+                        <td>$13.100.000</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="note">
+                <strong>Nota:</strong> El hosting, dominio y certificados SSL tienen un costo anual de aproximadamente $500.000 - $800.000 COP. Incluimos gestión y soporte técnico por 6 meses sin costo adicional.
+            </div>
+        </div>
+
+        <!-- CRONOGRAMA -->
+        <div class="section">
+            <h2>5. Cronograma de Implementación</h2>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-week">Semana 1-2</div>
+                    <div class="timeline-content">
+                        <h4>Fase 1: Diseño y Estructura</h4>
+                        <p>Briefing, wireframes, diseño visual, aprobación de estructura web</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-week">Semana 3-4</div>
+                    <div class="timeline-content">
+                        <h4>Fase 2: Desarrollo Core</h4>
+                        <p>Desarrollo del sitio, integración de sistema de reservas y pasarela de pagos</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-week">Semana 5</div>
+                    <div class="timeline-content">
+                        <h4>Fase 3: Herramientas</h4>
+                        <p>Chatbot WhatsApp, portal de clientes, integración facturación</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-week">Semana 6</div>
+                    <div class="timeline-content">
+                        <h4>Fase 4: SEO y Lanzamiento</h4>
+                        <p>Optimización SEO, pruebas finales, capacitación y lanzamiento</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BENEFICIOS -->
+        <div class="section">
+            <h2>6. Beneficios Esperados</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <h4>Mayor Captación de Clientes</h4>
+                    <p>SEO optimizado + chatbot 24/7 = más consultas automatizadas y mejor posicionamiento en Google.</p>
+                </div>
+                <div class="service-card">
+                    <h4>Profesionalismo Digital</h4>
+                    <p>Imagen web moderna que transmite confianza y solidez, diferenciándose de la competencia.</p>
+                </div>
+                <div class="service-card">
+                    <h4>Ahorro de Tiempo</h4>
+                    <p>Automatización de reservas, pagos y respuestas frecuentes. Menos gestión manual, más tiempo para litigar.</p>
+                </div>
+                <div class="service-card">
+                    <h4>Retención de Clientes</h4>
+                    <p>Portal de clientes mejora la experiencia y fideliza. Los clientes pueden ver el estado de su caso 24/7.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAQUETES -->
+        <div class="section">
+            <h2>7. Paquetes Disponibles</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Paquete</th>
+                        <th>Incluye</th>
+                        <th>Precio</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge">BÁSICO</span></td>
+                        <td>Rediseño web + SEO + Blog</td>
+                        <td>$5.000.000</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge">PROFESIONAL</span></td>
+                        <td>Básico + Reservas + Chatbot + Pagos</td>
+                        <td>$9.000.000</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge">PREMIUM</span></td>
+                        <td>Todo incluido + Portal Clientes + Facturación</td>
+                        <td>$13.100.000</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="footer">
+            <div class="company">DevJob Solutions</div>
+            <div class="contact-info">
+                <p>Desarrollo Web & Soluciones Digitales</p>
+                <p>Email: contacto@devjob.com | WhatsApp: +57 312 319 7433</p>
+                <p style="margin-top: 15px; color: #a0aec0; font-size: 12px;">Esta propuesta tiene vigencia de 30 días calendario a partir de la fecha de emisión.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

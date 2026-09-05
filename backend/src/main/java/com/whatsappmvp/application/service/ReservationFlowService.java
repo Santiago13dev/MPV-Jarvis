@@ -141,7 +141,7 @@ public class ReservationFlowService {
         return "¡Claro! Para hacer tu reserva necesito algunos datos:\n\n" +
                "Fecha (solo sabados)\n" +
                "Numero de personas\n" +
-               "Hora (11:10, 12:00, 12:30 o 13:00)\n" +
+               "Hora (11:30, 12:00, 12:30 o 13:00)\n" +
                "Tu nombre\n" +
                "Motivo (cumpleanos, reunion, etc.)\n\n" +
                "Envialos todos juntos o uno por uno.";
@@ -273,7 +273,7 @@ public class ReservationFlowService {
                         if (!isValidTime(time)) {
                             return Optional.of(
                                 "Los horarios disponibles son:\n\n" +
-                                "11:10 a.m.\n12:00 p.m.\n12:30 p.m.\n1:00 p.m.\n\n" +
+                                "11:30 a.m.\n12:00 p.m.\n12:30 p.m.\n1:00 p.m.\n\n" +
                                 "Por favor elige uno de estos horarios."
                             );
                         }
@@ -538,7 +538,7 @@ public class ReservationFlowService {
         if (!hasName) sb.append("\n- Tu *nombre completo*");
         if (!hasDate) sb.append("\n- *Fecha* (solo sabados)");
         if (!hasPeople) sb.append("\n- *Numero de personas*");
-        if (!hasTime) sb.append("\n- *Hora* (11:10, 12:00, 12:30 o 13:00)");
+        if (!hasTime) sb.append("\n- *Hora* (11:30, 12:00, 12:30 o 13:00)");
 
         sb.append("\n\nEnvíalos por favor.");
         return sb.toString();

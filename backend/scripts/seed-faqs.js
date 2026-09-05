@@ -66,7 +66,7 @@ const faqs = [
     question: '¿Cómo puedo reservar?',
     answer:
       'Contamos con los siguientes horarios para reservas:\n' +
-      '- 11:10 a. m.\n- 12:00 m.\n- 12:30 p. m.\n- 1:00 p. m.\n\n' +
+      '- 11:30 a. m.\n- 12:00 m.\n- 12:30 p. m.\n- 1:00 p. m.\n\n' +
       'Si deseas reservar para un horario posterior, haremos lo posible por ayudarte según la disponibilidad ' +
       'del restaurante. En estos casos, algunos platos deberán solicitarse con anticipación.',
     keywords: ['reservar', 'reserva', 'mesa', 'cita', 'apartar'],
