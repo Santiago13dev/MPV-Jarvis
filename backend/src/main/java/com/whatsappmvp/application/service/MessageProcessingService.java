@@ -19,6 +19,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * ============================================================
@@ -45,6 +47,9 @@ public class MessageProcessingService {
 
     private static final String ACTION_HUMAN_TRANSFER_OFFERED = "HUMAN_TRANSFER_OFFERED";
 
+    // Per-phone lock registry — serializa mensajes del mismo usuario
+    private final ConcurrentHashMap<String, Object> phoneLocks = new ConcurrentHashMap<>();
+
     private final RateLimitService rateLimitService;
     private final BusinessHoursService businessHoursService;
     private final KeywordMatchingService keywordMatchingService;
@@ -61,6 +66,7 @@ public class MessageProcessingService {
     private final BusinessConfigJpaRepository businessConfigRepository;
     private final ReservationService reservationService;
     private final ReservationFlowService reservationFlowService;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * Punto de entrada principal — llamado por WebhookController.
@@ -72,9 +78,31 @@ public class MessageProcessingService {
      * @param waMessageId ID original de WhatsApp
      * @param messageType Tipo de mensaje (TEXT, IMAGE, etc.)
      */
-    @Transactional
     public void processIncomingMessage(String phone, String remoteJid, String displayName, String content,
                                        String waMessageId, MessageType messageType) {
+        // Serializar por número de teléfono — evita race conditions
+        // cuando el usuario envía varios mensajes simultáneos
+        Object lock = phoneLocks.computeIfAbsent(phone, k -> new Object());
+        synchronized (lock) {
+            try {
+                processMessageInternal(phone, remoteJid, displayName, content, waMessageId, messageType);
+            } finally {
+                phoneLocks.remove(phone);
+            }
+        }
+    }
+
+    private void processMessageInternal(String phone, String remoteJid, String displayName, String content,
+                                         String waMessageId, MessageType messageType) {
+        // Usar TransactionTemplate para manejar la transacción explícitamente
+        // (necesario porque processMessageInTransaction es privado y @Transactional no funciona en métodos privados)
+        transactionTemplate.executeWithoutResult(status -> {
+            processMessageInTransaction(phone, remoteJid, displayName, content, waMessageId, messageType);
+        });
+    }
+
+    private void processMessageInTransaction(String phone, String remoteJid, String displayName, String content,
+                                              String waMessageId, MessageType messageType) {
         log.info("[Pipeline] Processing message from: {} | type: {} | content: '{}'",
                 phone, messageType, content != null ? content.substring(0, Math.min(50, content.length())) : "");
 
@@ -86,7 +114,7 @@ public class MessageProcessingService {
             }
         }
 
-        // ── PASO 2: Obtener o crear contacto ──────────────────────────────────
+        // ── PASO 3: Obtener o crear contacto ──────────────────────────────────
         ContactEntity contact = getOrCreateContact(phone, displayName);
 
         if (Boolean.TRUE.equals(contact.getIsBlocked())) {
@@ -94,7 +122,7 @@ public class MessageProcessingService {
             return;
         }
 
-        // ── PASO 3: Obtener o crear conversación ──────────────────────────────
+        // ── PASO 4: Obtener o crear conversación ──────────────────────────────
         boolean[] isNewConversation = {false};
         ConversationEntity conversation = getOrCreateConversation(contact, isNewConversation);
 
@@ -114,14 +142,6 @@ public class MessageProcessingService {
                 "Estás enviando muchos mensajes. Por favor espera un momento y vuelve a intentar.",
                 ProcessedBy.SYSTEM, 0);
             return;
-        }
-
-        // ── PASO 2.6: Deduplicar mensajes (WhatsApp reenvía los mismos) ────
-        if (waMessageId != null && !waMessageId.isBlank()) {
-            if (messageRepository.existsByWaMessageId(waMessageId)) {
-                log.info("[Pipeline] Duplicate message {} — ignoring", waMessageId);
-                return;
-            }
         }
 
         // ── PASO 4: Persistir mensaje INBOUND ─────────────────────────────────
