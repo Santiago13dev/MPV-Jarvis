@@ -390,12 +390,19 @@ async function sendImageMessage(to, imageUrl, caption = '') {
 
 /**
  * Enviar documento/PDF
+ * Descarga el archivo primero, luego envía como buffer (más confiable)
  */
 async function sendDocumentMessage(to, docUrl, filename, mimetype = 'application/pdf') {
   if (!sock || sessionStatus !== 'CONNECTED') throw new Error('WhatsApp not connected');
   const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+
+  // Descargar el archivo primero
+  const axios = require('axios');
+  const response = await axios.get(docUrl, { responseType: 'arraybuffer', timeout: 15000 });
+  const buffer = Buffer.from(response.data);
+
   const result = await sock.sendMessage(jid, {
-    document: { url: docUrl },
+    document: buffer,
     fileName: filename,
     mimetype,
   });

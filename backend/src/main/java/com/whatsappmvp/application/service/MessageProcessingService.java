@@ -164,6 +164,16 @@ public class MessageProcessingService {
             return;
         }
 
+        // ── PASO 5.62: Ubicación del restaurante ─────────────────────────────
+        if (isLocationRequest(normalizedContent)) {
+            log.info("[Pipeline] LOCATION request → sending restaurant location");
+            String locationMsg = "📍 Estamos ubicados en:\n*BENDITO CHICHARRÓN*\nSibaté, Cundinamarca\n\nTe envío la ubicación exacta:";
+            sendAndPersistResponse(conversation, remoteJid, locationMsg, ProcessedBy.SYSTEM, 0);
+            sendLocation(remoteJid, conversation,
+                    4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
+            return;
+        }
+
         // ── PASO 5.65: Solicitud de menú — enviar PDF ─────────────────────────
         if (isMenuRequest(normalizedContent)) {
             log.info("[Pipeline] MENU request → sending PDF");
@@ -450,6 +460,27 @@ public class MessageProcessingService {
         }
 
         return false;
+    }
+
+    /**
+     * Detecta si el usuario quiere ver la ubicación del restaurante.
+     */
+    private boolean isLocationRequest(String normalizedContent) {
+        if (normalizedContent == null || normalizedContent.isBlank()) return false;
+        return normalizedContent.contains("ubicacion") ||
+               normalizedContent.contains("ubicación") ||
+               normalizedContent.contains("dónde están") ||
+               normalizedContent.contains("donde estan") ||
+               normalizedContent.contains("donde esta") ||
+               normalizedContent.contains("dónde está") ||
+               normalizedContent.contains("en dónde") ||
+               normalizedContent.contains("en donde") ||
+               normalizedContent.contains("como llego") ||
+               normalizedContent.contains("cómo llego") ||
+               normalizedContent.contains("dirección") ||
+               normalizedContent.contains("direccion") ||
+               normalizedContent.contains("quedan") ||
+               normalizedContent.contains("location");
     }
 
     /**
