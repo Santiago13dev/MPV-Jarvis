@@ -76,13 +76,7 @@ public class MessageProcessingService {
         log.info("[Pipeline] Processing message from: {} | type: {} | content: '{}'",
                 phone, messageType, content != null ? content.substring(0, Math.min(50, content.length())) : "");
 
-        // ── PASO 1: Rate Limit ────────────────────────────────────────────────
-        if (!rateLimitService.isAllowed(phone)) {
-            log.warn("[Pipeline] Rate limit exceeded for: {} — ignoring", phone);
-            return;
-        }
-
-        // ── PASO 1.5: Deduplicar mensajes (WhatsApp reenvía los mismos) ────
+        // ── PASO 2: Obtener o crear contacto ──────────────────────────────────
         if (waMessageId != null && !waMessageId.isBlank()) {
             if (messageRepository.existsByWaMessageId(waMessageId)) {
                 log.info("[Pipeline] Duplicate message {} — ignoring", waMessageId);
@@ -110,6 +104,23 @@ public class MessageProcessingService {
         }
 
         boolean isFirstMessage = isNewConversation[0];
+
+        // ── PASO 2.5: Rate Limit ──────────────────────────────────────────────
+        if (!rateLimitService.isAllowed(phone)) {
+            log.warn("[Pipeline] Rate limit exceeded for: {} — sending notice", phone);
+            sendAndPersistResponse(conversation, remoteJid,
+                "Estás enviando muchos mensajes. Por favor espera un momento y vuelve a intentar.",
+                ProcessedBy.SYSTEM, 0);
+            return;
+        }
+
+        // ── PASO 2.6: Deduplicar mensajes (WhatsApp reenvía los mismos) ────
+        if (waMessageId != null && !waMessageId.isBlank()) {
+            if (messageRepository.existsByWaMessageId(waMessageId)) {
+                log.info("[Pipeline] Duplicate message {} — ignoring", waMessageId);
+                return;
+            }
+        }
 
         // ── PASO 4: Persistir mensaje INBOUND ─────────────────────────────────
         MessageEntity inboundMessage = persistMessage(conversation, waMessageId,
@@ -193,6 +204,9 @@ public class MessageProcessingService {
         if (humanTransferService.hasTransferKeyword(normalizedContent)) {
             log.info("[Pipeline] HUMAN TRANSFER keyword detected → transferring to human");
             humanTransferService.transferToHuman(conversation, remoteJid, "KEYWORD", content);
+            sendAndPersistResponse(conversation, remoteJid,
+                "Un asesor se comunicará contigo pronto. ¡Gracias por tu paciencia! 😊",
+                ProcessedBy.SYSTEM, 0);
             return;
         }
 
@@ -265,15 +279,21 @@ public class MessageProcessingService {
 
         if (aiEnabled) {
             log.info("[Pipeline] No rule/FAQ match → escalating to AI");
-            OpenAIServiceClient.OpenAIResult aiResult = aiService.generateResponse(conversation.getId(), content);
-            sendAndPersistResponse(conversation, remoteJid, aiResult.getText(), ProcessedBy.AI, aiResult.getTokensUsed());
+            try {
+                OpenAIServiceClient.OpenAIResult aiResult = aiService.generateResponse(conversation.getId(), content);
+                sendAndPersistResponse(conversation, remoteJid, aiResult.getText(), ProcessedBy.AI, aiResult.getTokensUsed());
 
-            // ── PASO 9.1: Verificar sentimiento después de responder ────────
-            // Si el cliente parece frustrado, transferir a humano
-            List<Map<String, String>> history = new ArrayList<>();
-            if (humanTransferService.isFrustrated(content, history)) {
-                log.info("[Pipeline] AI detected frustration → transferring to human");
-                humanTransferService.transferToHuman(conversation, remoteJid, "FRUSTRATION", content);
+                // ── PASO 9.1: Verificar sentimiento después de responder ────────
+                List<Map<String, String>> history = new ArrayList<>();
+                if (humanTransferService.isFrustrated(content, history)) {
+                    log.info("[Pipeline] AI detected frustration → transferring to human");
+                    humanTransferService.transferToHuman(conversation, remoteJid, "FRUSTRATION", content);
+                }
+            } catch (Exception e) {
+                log.error("[Pipeline] AI call failed: {}", e.getMessage());
+                sendAndPersistResponse(conversation, remoteJid,
+                    "Gracias por tu mensaje. Un asesor te atenderá pronto. 😊",
+                    ProcessedBy.SYSTEM, 0);
             }
         } else {
             log.info("[Pipeline] AI disabled and no match found → generic response");
