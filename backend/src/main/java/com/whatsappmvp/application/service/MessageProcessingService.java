@@ -196,9 +196,6 @@ public class MessageProcessingService {
             // Enviar ubicación del restaurante
             sendLocation(remoteJid, conversation,
                     4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
-
-            // Enviar menú del restaurante
-            sendMenuPdf(conversation, remoteJid);
         }
 
         // ── PASO 7: MOTOR HÍBRIDO ─────────────────────────────────────────────
@@ -452,10 +449,12 @@ public class MessageProcessingService {
                normalizedContent.contains("que tienen") ||
                normalizedContent.contains("qué sirven") ||
                normalizedContent.contains("que sirven") ||
-               normalizedContent.contains("comida") ||
-               normalizedContent.contains("comida hay") ||
                normalizedContent.contains("qué venden") ||
-               normalizedContent.contains("que venden");
+               normalizedContent.contains("que venden") ||
+               normalizedContent.contains("envíame el menú") ||
+               normalizedContent.contains("enviame el menu") ||
+               normalizedContent.contains("pasame el menú") ||
+               normalizedContent.contains("pasame el menu");
     }
 
     /**
