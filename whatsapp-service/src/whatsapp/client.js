@@ -32,11 +32,17 @@ let sessionStatus = 'DISCONNECTED'; // DISCONNECTED | CONNECTING | QR_READY | CO
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let permanentDisconnect = false; // true after 401/403 — blocks ALL reconnects
+let healthCheckInterval = null;
+let lastPongTime = Date.now();
 
 // ── Límites para evitar loops infinitos de reconexión ─────────────────────────
 const MAX_CONFLICT_RETRIES = 5;      // Max intentos de 440 antes de cooldown largo
 const CONFLICT_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutos de cooldown
 let conflictRetries = 0;
+
+// ── Health check ─────────────────────────────────────────────────────────────
+const HEALTH_CHECK_INTERVAL_MS = 45_000; // Ping cada 45 segundos
+const HEALTH_CHECK_TIMEOUT_MS = 15_000;  // Si no responde en 15s, reconectar
 
 // ── Getters públicos ────────────────────────────────────────────────────────────
 const getStatus = () => sessionStatus;
@@ -53,6 +59,69 @@ async function setStatus(newStatus, extra = {}) {
     await webhookService.notifyStatusChange({ status: newStatus, ...extra });
   } catch (err) {
     logger.warn({ err }, '[WA] Could not notify status change to backend');
+  }
+}
+
+// ── Health Check: keep-alive y auto-reconexión ───────────────────────────────
+function startHealthCheck() {
+  stopHealthCheck();
+  lastPongTime = Date.now();
+  healthCheckInterval = setInterval(async () => {
+    if (!sock || sessionStatus !== 'CONNECTED') return;
+    try {
+      // Enviar ping via presence update (keep-alive ligero)
+      const jid = sock.user?.id;
+      if (jid) {
+        await sock.sendPresenceUpdate('available', jid.split(':')[0] + '@s.whatsapp.net');
+      }
+      lastPongTime = Date.now();
+    } catch (err) {
+      logger.warn({ err: err.message }, '[WA] Health check ping failed');
+      // Si el ping falla, verificar cuánto tiempo sin respuesta
+      const timeSinceLastPong = Date.now() - lastPongTime;
+      if (timeSinceLastPong > HEALTH_CHECK_TIMEOUT_MS) {
+        logger.error('[WA] Health check timeout — socket may be dead, forcing reconnect');
+        await forceReconnect('HEALTH_CHECK_TIMEOUT');
+      }
+    }
+  }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+function stopHealthCheck() {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
+  }
+}
+
+async function forceReconnect(reason) {
+  logger.warn({ reason }, '[WA] Force reconnect triggered');
+  stopHealthCheck();
+  try {
+    if (sock) { try { await sock.end(); } catch (_) {} }
+    sock = null;
+  } catch (_) {}
+  await setStatus('ERROR', { error: reason });
+  // Reconectar inmediatamente
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, 3000);
+}
+
+// ── Notificar al admin cuando la conexión se cae ─────────────────────────────
+async function notifyAdminDisconnect(reason) {
+  try {
+    const adminPhone = config.adminPhone;
+    if (!adminPhone || adminPhone === '') return;
+    // Notificar via webhook al backend para que envíe alerta
+    await webhookService.notifyStatusChange({
+      status: 'DISCONNECTED',
+      reason: reason,
+      alert: true,
+      adminPhone: adminPhone,
+    });
+    logger.info({ adminPhone, reason }, '[WA] Admin disconnect notification sent');
+  } catch (err) {
+    logger.warn({ err }, '[WA] Could not notify admin of disconnect');
   }
 }
 
@@ -112,7 +181,7 @@ async function connect() {
       },
       // Configuraciones para reducir probabilidad de baneo
       defaultQueryTimeoutMs: 60_000,
-      keepAliveIntervalMs: 30_000,
+      keepAliveIntervalMs: 25_000, // Reducido de 30s a 25s para mayor estabilidad
       retryRequestDelayMs: 2_000,
       // Ignorar mensajes de broadcast/estado
       shouldIgnoreJid: jid => isJidBroadcast(jid),
@@ -141,16 +210,22 @@ async function connect() {
         qrBase64 = null;
         reconnectAttempts = 0;
         conflictRetries = 0;
+        lastPongTime = Date.now();
         const phoneNumber = sock.user?.id?.split(':')[0] || 'unknown';
         await setStatus('CONNECTED', { phoneNumber });
         logger.info({ phoneNumber }, '[WA] Connected successfully');
+        // Iniciar health check para mantener viva la conexión
+        startHealthCheck();
       }
 
       // Conexión cerrada
       if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
+        stopHealthCheck();
 
         logger.warn({ statusCode }, '[WA] Connection closed');
+        // Notificar al admin de la desconexión
+        await notifyAdminDisconnect(`Code: ${statusCode || 'unknown'}`);
 
         // 401 = Logged Out — credenciales inválidas, auto-reset y reconnect con QR nuevo
         if (statusCode === DisconnectReason.loggedOut) {
@@ -205,12 +280,12 @@ async function connect() {
 
         // 515 = WhatsApp server dropped connection (rate limit / anti-spam)
         if (statusCode === 515) {
-          logger.error('[WA] Server dropped connection (515) — cooldown 5 min');
+          logger.error('[WA] Server dropped connection (515) — cooldown 3 min');
           await setStatus('ERROR', { error: 'Server rate limit (515) — cooling down' });
           if (sock) { try { await sock.end(); } catch (_) {} }
           sock = null;
           if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 5 * 60 * 1000);
+          reconnectTimer = setTimeout(connect, 3 * 60 * 1000);
           return;
         }
 
@@ -271,14 +346,14 @@ function scheduleReconnect() {
   }
 
   if (reconnectAttempts >= config.maxReconnectAttempts) {
-    logger.warn('[WA] Max attempts reached — cooldown 5 min before retrying');
+    logger.warn('[WA] Max attempts reached — cooldown 2 min before retrying');
     setStatus('ERROR', { error: 'Reconnecting after cooldown' });
-    // Después de 5 minutos, reiniciar contador y volver a intentar
+    // Después de 2 minutos, reiniciar contador y volver a intentar
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectAttempts = 0;
       connect();
-    }, 5 * 60 * 1000);
+    }, 2 * 60 * 1000);
     return;
   }
 
@@ -317,6 +392,7 @@ async function disconnect() {
 async function resetSession() {
   try {
     // Limpiar TODO el estado primero
+    stopHealthCheck();
     permanentDisconnect = false;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;

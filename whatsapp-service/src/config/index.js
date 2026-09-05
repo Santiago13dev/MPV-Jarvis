@@ -16,5 +16,8 @@ module.exports = {
   maxReconnectAttempts: parseInt(process.env.MAX_RECONNECT_ATTEMPTS || '10'),
   reconnectBaseDelayMs: parseInt(process.env.RECONNECT_BASE_DELAY_MS || '3000'),
 
+  // Admin phone for disconnect notifications
+  adminPhone: process.env.ADMIN_PHONE || '',
+
   nodeEnv: process.env.NODE_ENV || 'development',
 };

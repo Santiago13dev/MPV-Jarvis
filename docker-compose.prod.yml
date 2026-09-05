@@ -39,6 +39,7 @@ services:
       BACKEND_WEBHOOK_URL: http://backend:8080/api/webhook/message
       WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET}
       SESSION_NAME: ${WA_SESSION_NAME:-default}
+      ADMIN_PHONE: ${ADMIN_PHONE:-}
       NODE_ENV: production
     volumes:
       - wa_sessions:/app/sessions
@@ -48,6 +49,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/session/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # --- Backend (Spring Boot) ---
   backend:
