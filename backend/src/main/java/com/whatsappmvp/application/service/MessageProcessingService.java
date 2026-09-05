@@ -102,10 +102,12 @@ public class MessageProcessingService {
         // Sleep + WhatsApp API — no bloquea otros mensajes del mismo teléfono
         for (PendingSend ps : pendingSends) {
             try {
-                // Rate limit outbound: máximo 3 concurrentes + 2s entre mensajes al mismo usuario
+                // Rate limit outbound: máximo 3 concurrentes + delay aleatorio 3-8s
                 rateLimitService.acquireOutbound(phone);
                 try {
-                    Thread.sleep(5000);
+                    // Delay humano aleatorio (3-8 segundos) — evita detección de spam por Meta
+                    long delayMs = 3000 + (long) (Math.random() * 5000);
+                    Thread.sleep(delayMs);
                     whatsAppClient.sendText(ps.targetJid(), ps.text());
                 } finally {
                     rateLimitService.releaseOutbound(phone);
