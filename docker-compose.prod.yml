@@ -68,6 +68,7 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-https://api.groq.com/openai/v1}
       WA_SERVICE_URL: http://whatsapp-service:3001
       WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET}
+      UPLOADS_BASE_URL: http://backend:8080
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_PHONE: ${ADMIN_PHONE:-}
