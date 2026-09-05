@@ -155,14 +155,6 @@ public class MessageProcessingService {
             return;
         }
 
-        // ── PASO 5.45: Modificar reserva existente ───────────────────────
-        if (isReservationModification(normalizedContent)) {
-            log.info("[Pipeline] RESERVATION MODIFICATION detected");
-            String modMsg = reservationFlowService.handleModification(conversation, content, phone);
-            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0);
-            return;
-        }
-
         // ── PASO 5.5: Si hay una acción pendiente (reserva en curso) ────────
         // PRIMERO verificar si hay reserva pendiente, ANTES de detectar nueva reserva
         if (reservationFlowService.hasPendingAction(conversation)) {
@@ -173,6 +165,14 @@ public class MessageProcessingService {
                 return;
             }
             // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
+        }
+
+        // ── PASO 5.55: Modificar reserva existente (solo si NO hay reserva en curso) ──
+        if (isReservationModification(normalizedContent)) {
+            log.info("[Pipeline] RESERVATION MODIFICATION detected");
+            String modMsg = reservationFlowService.handleModification(conversation, content, phone);
+            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0);
+            return;
         }
 
         // ── PASO 5.6: Reservar — iniciar flujo (solo si NO hay reserva pendiente) ──
@@ -491,25 +491,29 @@ public class MessageProcessingService {
     }
 
     /**
-     * Detecta si el usuario quiere MODIFICAR una reserva existente (personas, fecha, hora).
+     * Detecta si el usuario quiere MODIFICAR una reserva YA CONFIRMADA.
+     * Solo activo si NO hay reserva en curso y NO hay intención de reservar.
      */
     private boolean isReservationModification(String normalizedContent) {
         if (normalizedContent == null || normalizedContent.isBlank()) return false;
         if (normalizedContent.contains("?") || normalizedContent.contains("¿")) return false;
 
-        boolean hasPeopleChange = normalizedContent.contains("personas") &&
-            (normalizedContent.contains("somos") || normalizedContent.contains("ser") ||
-             normalizedContent.contains("cambiar") || normalizedContent.contains("actualizar") ||
-             normalizedContent.contains("modificar") || normalizedContent.contains("son") ||
-             normalizedContent.matches(".*\\d+\\s*personas.*"));
+        // Excluir si contiene intención de reserva (es una reserva nueva, no modificación)
+        if (isReservationIntent(normalizedContent)) return false;
 
-        boolean hasDateChange = (normalizedContent.contains("cambiar") || normalizedContent.contains("mover")) &&
-            (normalizedContent.contains("fecha") || normalizedContent.contains("dia") || normalizedContent.contains("día"));
+        // Solo modificar con verbos EXPLÍCITOS de modificación
+        boolean hasExplicitModifyVerb = normalizedContent.contains("cambiar") ||
+                                        normalizedContent.contains("actualizar") ||
+                                        normalizedContent.contains("modificar") ||
+                                        normalizedContent.contains("aumentar") ||
+                                        normalizedContent.contains("disminuir") ||
+                                        normalizedContent.contains("reducir");
 
-        boolean hasTimeChange = (normalizedContent.contains("cambiar") || normalizedContent.contains("mover")) &&
-            (normalizedContent.contains("hora") || normalizedContent.contains("horario"));
+        boolean hasPeopleRef = normalizedContent.contains("personas");
+        boolean hasDateRef = normalizedContent.contains("fecha") || normalizedContent.contains("día") || normalizedContent.contains("dia");
+        boolean hasTimeRef = normalizedContent.contains("hora") || normalizedContent.contains("horario");
 
-        return hasPeopleChange || hasDateChange || hasTimeChange;
+        return hasExplicitModifyVerb && (hasPeopleRef || hasDateRef || hasTimeRef);
     }
 
     /**
