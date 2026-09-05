@@ -205,13 +205,28 @@ public class ReservationFlowService {
             return Optional.of("¡Perfecto! Si necesitas algo más, estoy aquí.");
         }
 
-        // Detectar si el mensaje es una pregunta o interrupción
+        // ── Detectar si el mensaje es una pregunta, saludo o mensaje conversacional ──
         // NO limpiar el pending action - mantener el flujo de reserva
         boolean isQuestion = normalized.contains("?") || normalized.contains("¿");
         boolean isGreeting = normalized.equals("hola") || normalized.equals("buenos dias") ||
                 normalized.equals("buenas tardes") || normalized.equals("buenas noches") ||
                 normalized.equals("buen dia") || normalized.equals("ok") || normalized.equals("gracias") ||
                 normalized.equals("entendido") || normalized.equals("va") || normalized.equals("dale");
+
+        // Detectar si NO es datos de reserva (usar isNotReservationData que ya existe)
+        boolean isNotData = isNotReservationData(normalized);
+
+        // Detectar si es una INTENCIÓN de agregar más personas (e.g. "llevar 3 más", "agregar 2")
+        boolean isAddPeople = normalized.contains("más") || normalized.contains("mas") ||
+                normalized.contains("agregar") || normalized.contains("adicionar") || normalized.contains("adición");
+
+        if (isNotData && !isAddPeople) {
+            log.info("[ReservationFlow] Non-reservation message detected during flow - answering as question");
+            Optional<String> interruptionResponse = handleInterruption(conversation, content, phone, displayName);
+            if (interruptionResponse.isPresent()) {
+                return interruptionResponse;
+            }
+        }
 
         // Check if message also contains reservation data (e.g. "quiero reservar para mañana 10 personas?")
         boolean hasReservationDataInQuestion = isQuestion && (
@@ -223,15 +238,55 @@ public class ReservationFlowService {
                 parseTime(normalized, normalized) != null
         );
 
-        if ((isQuestion || isGreeting) && !hasReservationDataInQuestion) {
+        if ((isQuestion || isGreeting) && !hasReservationDataInQuestion && !isAddPeople) {
             log.info("[ReservationFlow] Question/greeting detected during flow - preserving reservation context");
-            // Handle interruption: answer question and ask to continue
             Optional<String> interruptionResponse = handleInterruption(conversation, content, phone, displayName);
             if (interruptionResponse.isPresent()) {
                 return interruptionResponse;
             }
-            // If handleInterruption returned empty, it means it was a confirm/cancel
-            // which will be handled by the SI/NO checks above
+        }
+
+        // ── Detectar "llevar X más" / "agregar X" — sumar al conteo existente ──
+        if (isAddPeople) {
+            Pattern addPattern = Pattern.compile("(?:llevar|agregar|adicionar|sumar)\\s+(\\d+)\\s*(?:más|mas|personas?|ademas|además)?");
+            Matcher addMatcher = addPattern.matcher(normalized);
+            if (addMatcher.find()) {
+                int additionalPeople = Integer.parseInt(addMatcher.group(1));
+                ObjectNode dataNode = readData(conversation);
+                int existingCount = dataNode.has("peopleCount") ? dataNode.get("peopleCount").asInt() : 0;
+                int newCount = existingCount + additionalPeople;
+                dataNode.put("peopleCount", newCount);
+                conversation.setPendingActionData(dataNode.toString());
+                conversationRepository.save(conversation);
+                log.info("[ReservationFlow] Adding {} people to existing {} = {}", additionalPeople, existingCount, newCount);
+
+                // Build status with ALL collected data
+                StringBuilder status = new StringBuilder();
+                status.append("¡Listo! Actualicé tu reserva a *").append(newCount).append(" personas*.\n\n");
+                status.append("📝 Detecté:\n");
+                if (dataNode.has("customerName") && !dataNode.get("customerName").asText().isBlank()) {
+                    status.append("- Nombre: ").append(dataNode.get("customerName").asText()).append("\n");
+                }
+                status.append("- Personas: ").append(newCount).append("\n");
+                if (dataNode.has("parsedDate") && !dataNode.get("parsedDate").isNull()) {
+                    status.append("- Fecha: ").append(dataNode.get("parsedDate").asText()).append("\n");
+                }
+                if (dataNode.has("time") && !dataNode.get("time").isNull()) {
+                    status.append("- Hora: ").append(dataNode.get("time").asText()).append("\n");
+                }
+                if (dataNode.has("motive") && !dataNode.get("motive").isNull()) {
+                    status.append("- Motivo: ").append(dataNode.get("motive").asText()).append("\n");
+                }
+                status.append("\n⏳ Falta:\n");
+                if (!dataNode.has("parsedDate") || dataNode.get("parsedDate").isNull()) {
+                    status.append("- *Fecha* (solo sábados)\n");
+                }
+                if (!dataNode.has("time") || dataNode.get("time").isNull()) {
+                    status.append("- *Hora* (11:30, 12:00, 12:30 o 1:00 PM)\n");
+                }
+                status.append("\nEnvíame los datos faltantes o pregunta lo que necesites.");
+                return Optional.of(status.toString());
+            }
         }
 
         // Use smartParse for better extraction (regex + LLM fallback)
@@ -996,6 +1051,11 @@ public class ReservationFlowService {
         Matcher m3 = p3.matcher(lower);
         if (m3.find()) return Integer.parseInt(m3.group(1));
 
+        // "llevar 3 más", "agregar 2", "sumar 4 personas"
+        Pattern p4 = Pattern.compile("(?:llevar|agregar|adicionar|sumar)\\s+(\\d+)");
+        Matcher m4 = p4.matcher(lower);
+        if (m4.find()) return Integer.parseInt(m4.group(1));
+
         if (lower.matches("\\d+") && !lower.matches("\\d{1,2}:\\d{2}")) {
             int num = Integer.parseInt(lower);
             if (num > 0 && num < 500) return num;
@@ -1069,6 +1129,12 @@ public class ReservationFlowService {
     private boolean isNotReservationData(String normalized) {
         if (normalized == null || normalized.isBlank()) return true;
 
+        // Si contiene keywords de reserva, SÍ es dato de reserva (no cancelar)
+        if (normalized.contains("reserv") || normalized.contains("sabado") || normalized.contains("sábado") ||
+            normalized.contains("personas") || normalized.contains("somos") || normalized.contains("hora")) {
+            return false;
+        }
+
         // Preguntas claras (contienen ? o ¿)
         if (normalized.contains("?") || normalized.contains("¿")) return true;
 
@@ -1079,7 +1145,7 @@ public class ReservationFlowService {
 
         // Palabras que indican que NO es datos de reserva sino conversación/preguntas
         String[] nonDataPhrases = {
-            "puedo", "quiero", "necesito", "tienen", "tienen?", "hay", "como",
+            "puedo", "necesito", "tienen", "tienen?", "hay", "como",
             "donde", "dónde", "cuando", "cuánto", "cuanto", "que", "qué",
             "habla", "dame", "envia", "envíame", "puedo llevar", "se puede",
             "aceptan", "aceptan?", "disponen", "manejan", "trabajan", "atenden",
