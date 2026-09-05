@@ -152,15 +152,21 @@ async function connect() {
 
         logger.warn({ statusCode }, '[WA] Connection closed');
 
-        // 401 = Logged Out — credenciales inválidas, NO reintentar automáticamente
+        // 401 = Logged Out — credenciales inválidas, auto-reset y reconnect con QR nuevo
         if (statusCode === DisconnectReason.loggedOut) {
-          permanentDisconnect = true;
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = null;
+          logger.warn('[WA] Session logged out (401) — auto-resetting sessions');
           if (sock) { try { await sock.end(); } catch (_) {} }
           sock = null;
-          await setStatus('DISCONNECTED', { reason: 'LOGGED_OUT' });
-          logger.error('[WA] Session logged out (401) — manual reset required. POST /session/reset');
+          // Borrar sesiones stale para generar QR fresco
+          const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
+          if (fs.existsSync(sessionsPath)) {
+            fs.rmSync(sessionsPath, { recursive: true, force: true });
+            logger.info({ path: sessionsPath }, '[WA] Deleted stale session files (401 auto-reset)');
+          }
+          qrBase64 = null;
+          await setStatus('QR_READY', { reason: 'AUTO_RESET_401' });
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 5000);
           return;
         }
 
@@ -310,6 +316,7 @@ async function disconnect() {
  */
 async function resetSession() {
   try {
+    // Limpiar TODO el estado primero
     permanentDisconnect = false;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -319,6 +326,7 @@ async function resetSession() {
     // Cerrar socket actual si existe
     if (sock) {
       try { await sock.logout(); } catch (_) {}
+      try { await sock.end(); } catch (_) {}
       sock = null;
     }
 
