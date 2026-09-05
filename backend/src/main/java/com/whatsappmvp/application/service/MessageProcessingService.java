@@ -178,7 +178,8 @@ public class MessageProcessingService {
         }
 
         // Solo procesar texto automáticamente (imágenes, docs, etc. → derivar a humano)
-        if (!MessageType.TEXT.equals(messageType)) {
+        // UNKNOWN con contenido de texto se procesa como texto (puede ser respuesta a mensaje)
+        if (messageType != null && messageType != MessageType.TEXT && messageType != MessageType.UNKNOWN) {
             String response = "📎 Recibí tu archivo. Un asesor lo revisará y te responderá pronto. 😊";
             sendAndPersistResponse(conversation, remoteJid, response, ProcessedBy.SYSTEM, 0);
             return;
