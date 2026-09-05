@@ -256,6 +256,7 @@ public class ReservationFlowService {
                 }
 
                 String lineLower = value.toLowerCase();
+                boolean matchedField = false;
 
                 if (reservationDate == null) {
                     LocalDate parsed = parseDateFromText(lineLower);
@@ -274,6 +275,7 @@ public class ReservationFlowService {
                             ));
                         }
                         reservationDate = parsed;
+                        matchedField = true;
                     }
                 }
 
@@ -288,6 +290,7 @@ public class ReservationFlowService {
                             );
                         }
                         time = parsedTime;
+                        matchedField = true;
                     }
                 }
 
@@ -295,26 +298,32 @@ public class ReservationFlowService {
                     Integer parsedPeople = parsePeopleCount(lineLower, value);
                     if (parsedPeople != null) {
                         peopleCount = parsedPeople;
+                        matchedField = true;
                     }
                 }
 
                 if (honoree == null && lineLower.equals("na")) {
                     honoree = "N/A";
+                    matchedField = true;
                 }
 
                 if (customerName == null || customerName.isBlank()) {
                     String detectedName = detectNameFromText(lineLower, value);
                     if (detectedName != null) {
                         customerName = detectedName;
+                        matchedField = true;
                     }
                 }
 
-                if (customerName == null || customerName.isBlank()) {
-                    customerName = value;
-                } else if (motive == null) {
-                    motive = value;
-                } else if (honoree == null) {
-                    honoree = value;
+                // Solo asignar a motive/honoree si la linea no matcheo un campo conocido
+                if (!matchedField) {
+                    if (customerName == null || customerName.isBlank()) {
+                        customerName = value;
+                    } else if (motive == null) {
+                        motive = value;
+                    } else if (honoree == null) {
+                        honoree = value;
+                    }
                 }
             }
 
@@ -714,8 +723,9 @@ public class ReservationFlowService {
         Matcher m2 = p2.matcher(lower);
         if (m2.find()) {
             int hour = Integer.parseInt(m2.group(1));
-            if (lower.contains("tarde") || lower.contains("pm")) {
-                if (hour < 12) hour += 12;
+            // "a la 1" en colombiano SIEMPRE es PM (13:00), a menos que diga "de la mañana"
+            if (lower.contains("tarde") || lower.contains("pm") || (!lower.contains("mañana") && !lower.contains("manana") && !lower.contains("am"))) {
+                if (hour >= 1 && hour <= 12) hour += 12;
             }
             return String.format("%02d:00", hour);
         }
@@ -742,6 +752,9 @@ public class ReservationFlowService {
     }
 
     private String parseMotive(String lower) {
+        // No parsear números ni horas como motivo
+        if (lower.matches("\\d{1,2}:\\d{2}")) return null;
+        if (lower.matches("\\d+")) return null;
         if (lower.contains("torta") || lower.contains("pastel") || lower.contains("cumpleaños") || lower.contains("cumpleanos")) return "Cumpleaños";
         if (lower.contains("celebración") || lower.contains("celebracion")) return "Celebración";
         if (lower.contains("perrito") || lower.contains("perro") || lower.contains("mascota")) return "Reunión con mascotas";
