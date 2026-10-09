@@ -79,6 +79,12 @@ app:
     max-messages-per-window: 30
     window-minutes: 5
 
+  # ── Motor de reservas ───────────────────────────────────────────────────────
+  # (precios, horarios, capacidades y retención se editan desde el dashboard: restaurant_settings)
+  reservations:
+    timezone: ${RESERVATIONS_TIMEZONE:America/Bogota}
+    expiration-interval-ms: ${RESERVATIONS_EXPIRATION_INTERVAL_MS:60000}
+
   # ── Upload ──────────────────────────────────────────────────────────────────
   uploads:
     base-path: ${UPLOADS_PATH:/app/uploads}

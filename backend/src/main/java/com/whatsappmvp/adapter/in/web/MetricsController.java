@@ -43,8 +43,9 @@ public class MetricsController {
             .build();
 
         long totalRes = reservationRepository.count();
-        long pendingRes = reservationRepository.countByStatus(ReservationStatus.PENDIENTE);
-        long confirmedRes = reservationRepository.countByStatus(ReservationStatus.CONFIRMADA);
+        long pendingRes = reservationRepository.countByStatus(ReservationStatus.PAYMENT_PENDING)
+                + reservationRepository.countByStatus(ReservationStatus.PAYMENT_RECEIPT_SENT);
+        long confirmedRes = reservationRepository.countByStatus(ReservationStatus.CONFIRMED);
 
         DashboardDTO dashboardDTO = DashboardDTO.builder()
             .metrics(metrics)

@@ -11,4 +11,8 @@ public class WebhookMessageRequest {
     private String content;
     private String messageType;
     private String timestamp;
+
+    /** Adjunto (imagen/PDF) en base64, solo cuando el cliente envía un posible comprobante de pago. */
+    private String mediaBase64;
+    private String mediaMimeType;
 }

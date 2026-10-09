@@ -197,27 +197,126 @@ export interface WsSessionEvent {
 }
 
 // ── Reservation ──────────────────────────────────────────────
-export type ReservationStatus = 'PENDIENTE' | 'CONFIRMADA' | 'CANCELADA';
+export type ReservationStatus =
+  'PENDING' | 'PAYMENT_PENDING' | 'PAYMENT_RECEIPT_SENT' | 'CONFIRMED' | 'CANCELLED' | 'EXPIRED';
+
+export type ReservationType = 'NORMAL' | 'VIP';
 
 export interface Reservation {
   id: string;
+  reservationNumber: number;
   customerName: string;
   phoneNumber: string;
-  reservationDate: string;
-  amount: number;
+  receiptPhone?: string | null;
+  reservationType: ReservationType;
+  date: string;          // yyyy-MM-dd
+  time: string;          // HH:mm:ss
+  partySize: number;
+  unitPrice: number;
+  totalPrice: number;    // lo calcula el backend
   status: ReservationStatus;
-  notes?: string;
-  peopleCount?: number;
+  notes?: string | null;
+  holdExpiresAt?: string | null;
+  confirmedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+  hasReceipt: boolean;
+  paymentReceiptUploadedAt?: string | null;
   createdAt: string;
 }
 
+/** Creación manual (dashboard). Pasa por el mismo ReservationService que WhatsApp. */
 export interface ReservationRequest {
   customerName: string;
   phoneNumber: string;
-  reservationDate: string;
-  amount: number;
-  status?: ReservationStatus;
+  receiptPhone?: string;
+  reservationType?: ReservationType;
+  date: string;
+  time: string;
+  partySize: number;
   notes?: string;
+  status?: ReservationStatus;   // PAYMENT_PENDING (default) | PENDING | CONFIRMED
+}
+
+/** null/undefined = sin cambio. */
+export interface ReservationUpdate {
+  date?: string;
+  time?: string;
+  partySize?: number;
+  reservationType?: ReservationType;
+}
+
+export interface ReservationFilter {
+  from?: string;
+  to?: string;
+  status?: ReservationStatus[];
+  type?: ReservationType | '';
+  q?: string;
+}
+
+export interface ReservationStats {
+  date: string;
+  reservationsToday: number;
+  peopleToday: number;
+  vipToday: number;
+  confirmedRevenueFromToday: number;
+  pendingPayments: number;
+  remainingCapacityToday: number;
+}
+
+export interface CapacityPool {
+  capacity: number;
+  reserved: number;
+  available: number;
+}
+
+export interface SlotAvailability {
+  time: string;
+  blocked: boolean;
+  passed: boolean;
+  normal: CapacityPool;
+  vip: CapacityPool;
+}
+
+export type ReceiptStatus = 'RECEIVED' | 'ACCEPTED' | 'REJECTED';
+
+export interface ReservationReceipt {
+  id: string;
+  mimeType: string;
+  status: ReceiptStatus;
+  uploadedAt: string;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+}
+
+export interface ReservationSettings {
+  normalPrice: number;
+  vipPrice: number;
+  vipCapacity: number;
+  operatingDays: string[];            // 'SATURDAY', 'SUNDAY'...
+  reservationStartTime: string;       // HH:mm:ss
+  reservationEndTime: string;
+  slotIntervalMinutes: number;
+  defaultSlotCapacity: number;
+  maxPartySize: number;
+  holdMinutes: number;
+  vipConsumesNormalCapacity: boolean;
+  paymentInstructions?: string | null;
+}
+
+export interface CapacityRule {
+  id: string;
+  dayOfWeek?: string | null;          // null = todos los días
+  slotTime?: string | null;           // null = todas las franjas
+  capacity: number;
+}
+
+export interface ReservationBlock {
+  id: string;
+  date: string;
+  slotTime?: string | null;           // null = día completo
+  reason?: string | null;
 }
 
 export interface DashboardMetrics {

@@ -4,6 +4,7 @@ import com.whatsappmvp.domain.enums.ConversationStatus;
 import com.whatsappmvp.domain.enums.MessageDirection;
 import com.whatsappmvp.domain.enums.MessageType;
 import com.whatsappmvp.domain.enums.ProcessedBy;
+import com.whatsappmvp.application.reservation.ReservationConversationService;
 import com.whatsappmvp.config.AppProperties;
 import com.whatsappmvp.infrastructure.client.OpenAIServiceClient;
 import com.whatsappmvp.infrastructure.client.WhatsAppServiceClient;
@@ -64,8 +65,7 @@ public class MessageProcessingService {
     private final ConversationJpaRepository conversationRepository;
     private final MessageJpaRepository messageRepository;
     private final BusinessConfigJpaRepository businessConfigRepository;
-    private final ReservationService reservationService;
-    private final ReservationFlowService reservationFlowService;
+    private final ReservationConversationService reservationConversation;
     private final TransactionTemplate transactionTemplate;
 
     /**
@@ -80,6 +80,15 @@ public class MessageProcessingService {
      */
     public void processIncomingMessage(String phone, String remoteJid, String displayName, String content,
                                        String waMessageId, MessageType messageType) {
+        processIncomingMessage(phone, remoteJid, displayName, content, waMessageId, messageType, null, null);
+    }
+
+    /**
+     * Igual que el anterior, con el adjunto (imagen/PDF en base64) cuando el cliente envía un comprobante de pago.
+     */
+    public void processIncomingMessage(String phone, String remoteJid, String displayName, String content,
+                                       String waMessageId, MessageType messageType,
+                                       String mediaBase64, String mediaMimeType) {
         // Serializar por número de teléfono — evita race conditions
         Object lock = phoneLocks.computeIfAbsent(phone, k -> new Object());
         List<PendingSend> pendingSends;
@@ -90,7 +99,8 @@ public class MessageProcessingService {
             try {
                 pendingSends = new ArrayList<>();
                 transactionTemplate.executeWithoutResult(status -> {
-                    processMessageInTransaction(phone, remoteJid, displayName, content, waMessageId, messageType, pendingSends);
+                    processMessageInTransaction(phone, remoteJid, displayName, content, waMessageId, messageType,
+                            mediaBase64, mediaMimeType, pendingSends);
                 });
             } finally {
                 phoneLocks.remove(phone);
@@ -122,6 +132,7 @@ public class MessageProcessingService {
 
     private void processMessageInTransaction(String phone, String remoteJid, String displayName, String content,
                                               String waMessageId, MessageType messageType,
+                                              String mediaBase64, String mediaMimeType,
                                               List<PendingSend> pendingSends) {
         log.info("[Pipeline] Processing message from: {} | type: {} | content: '{}'",
                 phone, messageType, content != null ? content.substring(0, Math.min(50, content.length())) : "");
@@ -187,15 +198,7 @@ public class MessageProcessingService {
             return;
         }
 
-        // ── PASO 5.4: Cancelar reserva — antes de iniciar reserva ───────────
         String normalizedContent = content != null ? content.trim().toLowerCase() : "";
-        if ((normalizedContent.contains("cancelar") || normalizedContent.contains("eliminar")) &&
-            (normalizedContent.contains("reserva") || normalizedContent.contains("reservación") || normalizedContent.contains("reservacion"))) {
-            log.info("[Pipeline] CANCEL RESERVATION trigger → starting cancel flow");
-            String cancelMsg = reservationFlowService.startCancelFlow(conversation, phone);
-            sendAndPersistResponse(conversation, remoteJid, cancelMsg, ProcessedBy.SYSTEM, 0, pendingSends);
-            return;
-        }
 
         // ── PASO 5.45: Responder a oferta de asesor ──────────────────────────
         // Si la IA ofreció conectar con asesor y el cliente dice "si", ejecutar transferencia real
@@ -233,47 +236,66 @@ public class MessageProcessingService {
             conversationRepository.save(conversation);
         }
 
-        // ── PASO 5.5: Si hay una acción pendiente (reserva en curso) ────────
-        // PRIMERO verificar si hay reserva pendiente, ANTES de detectar nueva reserva
-        if (reservationFlowService.hasPendingAction(conversation)) {
-            log.info("[Pipeline] Pending reservation action detected → handling step");
-            var stepResponse = reservationFlowService.handleStep(conversation, content, phone, displayName);
-            if (stepResponse.isPresent()) {
-                String responseText = stepResponse.get();
-
-                // Handle interruption marker: answer question + preserve reservation flow
-                if (responseText.startsWith("__INTERRUPTION__")) {
-                    String reservationStatus = responseText.substring("__INTERRUPTION__".length());
-
-                    // Try to answer the question using FAQ/AI
-                    String questionAnswer = answerQuestionDuringReservation(conversation, content, remoteJid);
-
-                    // Combine answer with reservation status
-                    String combinedResponse = questionAnswer + "\n\n" + reservationStatus;
-                    sendAndPersistResponse(conversation, remoteJid, combinedResponse, ProcessedBy.SYSTEM, 0, pendingSends);
+        // ── PASO 5.5: Comprobante de pago (imagen/PDF) ──────────────────────
+        // Se asocia a la reserva pendiente de pago del cliente. Si no hay ninguna, sigue el flujo normal
+        // (el archivo se deriva a un asesor más abajo).
+        if (mediaBase64 != null && !mediaBase64.isBlank()
+                && (messageType == MessageType.IMAGE || messageType == MessageType.DOCUMENT)) {
+            try {
+                byte[] bytes = java.util.Base64.getDecoder().decode(mediaBase64);
+                var receiptReply = reservationConversation.handleReceipt(
+                        conversation, phone, bytes, mediaMimeType, content, waMessageId);
+                if (receiptReply.isPresent()) {
+                    log.info("[Pipeline] Payment receipt registered for {}", phone);
+                    sendAndPersistResponse(conversation, remoteJid, receiptReply.get(), ProcessedBy.SYSTEM, 0, pendingSends);
                     return;
                 }
-
-                sendAndPersistResponse(conversation, remoteJid, responseText, ProcessedBy.SYSTEM, 0, pendingSends);
-                return;
+            } catch (IllegalArgumentException e) {
+                log.warn("[Pipeline] Invalid base64 attachment from {}: {}", phone, e.getMessage());
             }
-            // If handleStep returned empty, the action was cleared or unrecognized — continue normal pipeline
         }
 
-        // ── PASO 5.55: Modificar reserva existente (solo si NO hay reserva en curso) ──
-        if (isReservationModification(normalizedContent)) {
-            log.info("[Pipeline] RESERVATION MODIFICATION detected");
-            String modMsg = reservationFlowService.handleModification(conversation, content, phone);
-            sendAndPersistResponse(conversation, remoteJid, modMsg, ProcessedBy.SYSTEM, 0, pendingSends);
+        // ── PASO 5.55: Transferencia a humano (keywords) ─────────────────────
+        // Va ANTES del motor de reservas: si el cliente pide un asesor, esa petición manda sobre cualquier
+        // borrador de reserva en curso (si no, el motor respondería con el recordatorio y lo dejaría atrapado).
+        if (humanTransferService.hasTransferKeyword(normalizedContent)) {
+            log.info("[Pipeline] HUMAN TRANSFER keyword detected → transferring to human");
+            reservationConversation.discardDraft(conversation);
+            humanTransferService.transferToHuman(conversation, remoteJid, "KEYWORD", content);
+            sendAndPersistResponse(conversation, remoteJid,
+                "Un asesor se comunicará contigo pronto. ¡Gracias por tu paciencia! 😊",
+                ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
-        // ── PASO 5.6: Reservar — iniciar flujo (solo si NO hay reserva pendiente) ──
-        if (isReservationIntent(normalizedContent)) {
-            log.info("[Pipeline] RESERVATION trigger → starting reservation flow");
-            String resMsg = reservationFlowService.startFlow(conversation, content, displayName);
-            sendAndPersistResponse(conversation, remoteJid, resMsg, ProcessedBy.SYSTEM, 0, pendingSends);
-            return;
+        // ── PASO 5.6: MOTOR DE RESERVAS ─────────────────────────────────────
+        // Crear / consultar / modificar / cancelar. El estado vive en reservation_drafts (PostgreSQL);
+        // la disponibilidad y la creación las decide el backend. Lo que no es de reservas sigue el motor híbrido.
+        if ((messageType == null || messageType == MessageType.TEXT || messageType == MessageType.UNKNOWN)
+                && content != null && !content.isBlank()) {
+            var reservationResult = reservationConversation.handleText(conversation, phone, content, waMessageId);
+            switch (reservationResult.kind()) {
+                case REPLY -> {
+                    sendAndPersistResponse(conversation, remoteJid, reservationResult.text(),
+                            ProcessedBy.SYSTEM, 0, pendingSends);
+                    return;
+                }
+                case QUESTION_WITH_REMINDER -> {
+                    // Pregunta ajena durante una reserva: se responde y se conserva el borrador
+                    if (isMenuRequest(normalizedContent)) {
+                        // El menú es un PDF: se envía y luego se retoma la reserva
+                        sendMenuPdf(conversation, remoteJid, pendingSends);
+                        sendAndPersistResponse(conversation, remoteJid, reservationResult.text(),
+                                ProcessedBy.SYSTEM, 0, pendingSends);
+                        return;
+                    }
+                    String answer = answerQuestionDuringReservation(conversation, content, remoteJid);
+                    sendAndPersistResponse(conversation, remoteJid, answer + "\n\n" + reservationResult.text(),
+                            ProcessedBy.SYSTEM, 0, pendingSends);
+                    return;
+                }
+                case NOT_HANDLED -> { /* continúa con el motor híbrido */ }
+            }
         }
 
         // ── PASO 5.62: Ubicación del restaurante ─────────────────────────────
@@ -290,16 +312,6 @@ public class MessageProcessingService {
         if (isMenuRequest(normalizedContent)) {
             log.info("[Pipeline] MENU request → sending PDF");
             sendMenuPdf(conversation, remoteJid, pendingSends);
-            return;
-        }
-
-        // ── PASO 5.7: Transferencia a humano (keywords) ──────────────────────
-        if (humanTransferService.hasTransferKeyword(normalizedContent)) {
-            log.info("[Pipeline] HUMAN TRANSFER keyword detected → transferring to human");
-            humanTransferService.transferToHuman(conversation, remoteJid, "KEYWORD", content);
-            sendAndPersistResponse(conversation, remoteJid,
-                "Un asesor se comunicará contigo pronto. ¡Gracias por tu paciencia! 😊",
-                ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -512,111 +524,6 @@ public class MessageProcessingService {
                 "unreadCount", conv.getUnreadCount(),
                 "lastMessageAt", conv.getLastMessageAt() != null ? conv.getLastMessageAt().toString() : ""
         );
-    }
-
-    /**
-     * Detecta intención de reserva en mensajes naturales.
-     * Busca palabras clave directas y patrones contextuales.
-     */
-    private boolean isReservationIntent(String normalizedContent) {
-        if (normalizedContent == null || normalizedContent.isBlank()) return false;
-        // Excluir cancelaciones/eliminaciones (ya manejado en paso 5.4)
-        if (normalizedContent.contains("cancelar") || normalizedContent.contains("eliminar")) return false;
-
-        // Excluir preguntas — si lleva "?" o "¿", es una pregunta, no intención de reserva
-        if (normalizedContent.contains("?") || normalizedContent.contains("¿")) return false;
-
-        // Palabras clave directas de reserva
-        if (normalizedContent.contains("reserva") ||
-            normalizedContent.contains("reservar") ||
-            normalizedContent.contains("reservacion") ||
-            normalizedContent.contains("reservación") ||
-            normalizedContent.contains("apartar") ||
-            normalizedContent.contains("agendar")) {
-            return true;
-        }
-
-        // Patrones contextuales: intención de hacer reserva sin decir "reservar"
-        if (normalizedContent.contains("quiero hacer") &&
-            (normalizedContent.contains("mesa") || normalizedContent.contains("cita") ||
-             normalizedContent.contains("reunion") || normalizedContent.contains("reunión"))) {
-            return true;
-        }
-
-        if (normalizedContent.contains("necesito") &&
-            (normalizedContent.contains("mesa") || normalizedContent.contains("lugar") ||
-             normalizedContent.contains("espacio"))) {
-            return true;
-        }
-
-        if (normalizedContent.contains("me gustaría") || normalizedContent.contains("me gustaria")) {
-            if (normalizedContent.contains("reservar") || normalizedContent.contains("apartar") ||
-                normalizedContent.contains("mesa")) {
-                return true;
-            }
-        }
-
-        // Detectar mensajes con datos de reserva pero sin palabra clave explícita
-        // "para X personas" + (sábado/fecha) = reserva
-        boolean hasPeopleCount = normalizedContent.contains("personas") ||
-                                 normalizedContent.matches(".*para\\s+\\d+.*");
-        boolean hasDateReference = normalizedContent.contains("sabado") ||
-                                   normalizedContent.contains("sábado") ||
-                                   normalizedContent.contains("mañana") ||
-                                   normalizedContent.contains("manana") ||
-                                   normalizedContent.matches(".*\\d{1,2}[/\\-]\\d{1,2}[/\\-]\\d{4}.*");
-
-        if (hasPeopleCount && hasDateReference) {
-            return true;
-        }
-
-        // "llevar" + (torta/pastel) SOLO con verbos de intención explícita
-        // "quiero llevar torta" = reserva, pero "puedo llevar torta" = pregunta
-        boolean hasIntentionVerb = normalizedContent.contains("quiero") ||
-                                   normalizedContent.contains("voy a") ||
-                                   normalizedContent.contains("me gustaría") ||
-                                   normalizedContent.contains("me gustaria") ||
-                                   normalizedContent.contains("necesito") ||
-                                   normalizedContent.contains("agendar");
-
-        if (hasIntentionVerb && normalizedContent.contains("llevar") &&
-            (normalizedContent.contains("torta") || normalizedContent.contains("pastel"))) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Detecta si el usuario quiere MODIFICAR una reserva YA CONFIRMADA.
-     * Solo activo si NO hay reserva en curso y NO hay intención de reservar.
-     */
-    private boolean isReservationModification(String normalizedContent) {
-        if (normalizedContent == null || normalizedContent.isBlank()) return false;
-        if (normalizedContent.contains("?") || normalizedContent.contains("¿")) return false;
-
-        // Excluir si contiene intención de reserva (es una reserva nueva, no modificación)
-        if (isReservationIntent(normalizedContent)) return false;
-
-        // Detectar patrones aditivos: "llevar 2 más", "agregar 3 personas", "sumar 1"
-        boolean hasAdditivePattern = (normalizedContent.contains("llevar") || normalizedContent.contains("agregar") ||
-                normalizedContent.contains("adicionar") || normalizedContent.contains("sumar")) &&
-                (normalizedContent.contains("más") || normalizedContent.contains("mas"));
-
-        // Detectar verbos EXPLÍCITOS de modificación
-        boolean hasExplicitModifyVerb = normalizedContent.contains("cambiar") ||
-                normalizedContent.contains("actualizar") ||
-                normalizedContent.contains("modificar") ||
-                normalizedContent.contains("aumentar") ||
-                normalizedContent.contains("disminuir") ||
-                normalizedContent.contains("reducir");
-
-        boolean hasPeopleRef = normalizedContent.contains("personas") || normalizedContent.contains("más") ||
-                normalizedContent.contains("mas");
-        boolean hasDateRef = normalizedContent.contains("fecha") || normalizedContent.contains("día") || normalizedContent.contains("dia");
-        boolean hasTimeRef = normalizedContent.contains("hora") || normalizedContent.contains("horario");
-
-        return hasAdditivePattern || (hasExplicitModifyVerb && (hasPeopleRef || hasDateRef || hasTimeRef));
     }
 
     /**

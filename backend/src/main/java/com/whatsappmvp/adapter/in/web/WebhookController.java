@@ -52,7 +52,8 @@ public class WebhookController {
             try {
                 messageProcessingService.processIncomingMessage(
                     req.getPhone(), req.getRemoteJid(), req.getDisplayName(),
-                    req.getContent(), req.getWaMessageId(), finalType
+                    req.getContent(), req.getWaMessageId(), finalType,
+                    req.getMediaBase64(), req.getMediaMimeType()
                 );
             } catch (Exception e) {
                 log.error("[Webhook] Failed to process message from {}: {}", req.getPhone(), e.getMessage(), e);

@@ -304,7 +304,7 @@ async function connect() {
         if (msg.key.remoteJid === 'status@broadcast') continue;
 
         try {
-          await webhookService.forwardIncomingMessage(msg);
+          await webhookService.forwardIncomingMessage(msg, sock);
         } catch (err) {
           logger.error({ err, msgId: msg.key.id }, '[WA] Failed to forward message to backend');
         }
