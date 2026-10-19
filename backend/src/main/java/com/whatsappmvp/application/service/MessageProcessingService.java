@@ -5,6 +5,7 @@ import com.whatsappmvp.domain.enums.MessageDirection;
 import com.whatsappmvp.domain.enums.MessageType;
 import com.whatsappmvp.domain.enums.ProcessedBy;
 import com.whatsappmvp.application.reservation.ReservationConversationService;
+import com.whatsappmvp.application.reservation.TextNormalizer;
 import com.whatsappmvp.config.AppProperties;
 import com.whatsappmvp.infrastructure.client.OpenAIServiceClient;
 import com.whatsappmvp.infrastructure.client.WhatsAppServiceClient;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -47,6 +49,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class MessageProcessingService {
 
     private static final String ACTION_HUMAN_TRANSFER_OFFERED = "HUMAN_TRANSFER_OFFERED";
+
+    /** Primera palabra que delata una pregunta cuando el mensaje no trae "?". */
+    private static final java.util.Set<String> QUESTION_OPENERS = java.util.Set.of(
+            "cuanto", "cuando", "donde", "cual", "cuales", "que", "quien", "quienes", "como",
+            "tienen", "tiene", "hacen", "hace", "puedo", "pueden", "existe", "existen", "habra",
+            "don", "cualquier", "sabes");
 
     // Per-phone lock registry — serializa mensajes del mismo usuario
     private final ConcurrentHashMap<String, Object> phoneLocks = new ConcurrentHashMap<>();
@@ -276,7 +284,10 @@ public class MessageProcessingService {
             var reservationResult = reservationConversation.handleText(conversation, phone, content, waMessageId);
             switch (reservationResult.kind()) {
                 case REPLY -> {
-                    sendAndPersistResponse(conversation, remoteJid, reservationResult.text(),
+                    // El mensaje puede mezclar la reserva con otra pregunta
+                    // ("reserva para 10 y voy con mi perro"): se contesta la FAQ primero
+                    String engineText = withSideFaqAnswer(content, reservationResult.text());
+                    sendAndPersistResponse(conversation, remoteJid, engineText,
                             ProcessedBy.SYSTEM, 0, pendingSends);
                     return;
                 }
@@ -327,22 +338,10 @@ public class MessageProcessingService {
 
         // boolean withinBusinessHours = businessHoursService.isWithinBusinessHours(); // DESHABILITADO
 
-        // ── PASO 6: Mensaje de bienvenida (primer mensaje del día/conversación) ─
-        if (isFirstMessage) {
-            String welcome = businessHoursService.getWelcomeMessage();
-            sendAndPersistResponse(conversation, remoteJid, welcome, ProcessedBy.SYSTEM, 0, pendingSends);
-
-            // Enviar ubicación del restaurante
-            sendLocation(remoteJid, conversation,
-                    4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
-
-            // NO continuar a FAQ/IA — la bienvenida es la única respuesta
-            return;
-        }
-
         // ── PASO 7: MOTOR HÍBRIDO ─────────────────────────────────────────────
-        // Keywords y FAQs funcionan SIEMPRE (dentro o fuera de horario).
-        // Solo AI y reservas se bloquean fuera de horario.
+        // Keywords y FAQs funcionan SIEMPRE (dentro o fuera de horario) y ANTES de la
+        // bienvenida: si el primer mensaje del cliente es una pregunta ("¿tienen wifi?")
+        // se contesta en vez de devolver solo el saludo.
 
         // 7A — Keywords
         var keywordMatch = keywordMatchingService.findMatch(content);
@@ -357,6 +356,22 @@ public class MessageProcessingService {
         if (faqMatch.isPresent()) {
             log.info("[Pipeline] FAQ match → sending response");
             sendAndPersistResponse(conversation, remoteJid, faqMatch.get(), ProcessedBy.FAQ, 0, pendingSends);
+            return;
+        }
+
+        // ── PASO 6: Mensaje de bienvenida (solo el primer mensaje) ────────────
+        // Va DESPUÉS de keywords/FAQ: si el primer mensaje es una pregunta con match,
+        // se contesta. Si es pregunta sin match, se salta a la IA (paso 9) en vez de
+        // devolver solo el saludo ("¿hacen domicilios?" no debe recibir el bienvenido).
+        if (isFirstMessage && !looksLikeQuestion(content)) {
+            String welcome = businessHoursService.getWelcomeMessage();
+            sendAndPersistResponse(conversation, remoteJid, welcome, ProcessedBy.SYSTEM, 0, pendingSends);
+
+            // Enviar ubicación del restaurante
+            sendLocation(remoteJid, conversation,
+                    4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
+
+            // NO continuar a IA — la bienvenida es la única respuesta
             return;
         }
 
@@ -640,5 +655,44 @@ public class MessageProcessingService {
 
         // Default response if nothing works
         return "Con gusto te ayudo con eso. ¿En qué más puedo ayudarte?";
+    }
+
+    /**
+     * Combina la respuesta del motor de reservas con la FAQ de la pregunta lateral del mensaje.
+     * Ej.: "reserva para 10 y voy con mi perro" → FAQ de mascotas + "Para cuántas personas…".
+     */
+    private String withSideFaqAnswer(String content, String engineText) {
+        var sideFaq = faqMatchingService.findMatch(content, MessageProcessingService::isReservationFaq, 3);
+        if (sideFaq.isEmpty()) {
+            return engineText;
+        }
+        log.info("[Pipeline] Side FAQ while answering reservation: {}", sideFaq.get());
+        return sideFaq.get() + "\n\n" + engineText;
+    }
+
+    /** FAQs que pertenecen al dominio de reservas: el motor ya responde esas, no se anteponen. */
+    private static boolean isReservationFaq(FaqItemEntity faq) {
+        String question = faq.getQuestion().toLowerCase(Locale.ROOT);
+        if (question.contains("reserva")) return true;
+        String[] keywords = faq.getKeywords();
+        if (keywords == null) return false;
+        for (String keyword : keywords) {
+            String k = keyword.toLowerCase(Locale.ROOT);
+            if (k.contains("reserv") || k.equals("mesa") || k.equals("mesas") || k.equals("cita")
+                    || k.equals("apartar") || k.contains("disponibilidad") || k.contains("cupo")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** ¿El primer mensaje es una pregunta? Si lo es, se contesta (FAQ/IA) en vez de mandar la bienvenida. */
+    private static boolean looksLikeQuestion(String content) {
+        if (content.contains("?")) return true;
+        String n = TextNormalizer.normalize(content);
+        if (n.isEmpty()) return false;
+        String first = n.split(" ")[0];
+        return QUESTION_OPENERS.contains(first) || n.startsWith("hay ") || n.startsWith("se puede ")
+                || n.startsWith("me dan ") || n.startsWith("nos dan ");
     }
 }

@@ -35,7 +35,12 @@ public class ReservationIntentExtractor {
     }
 
     /** Estado conversacional que ayuda a interpretar respuestas cortas ("5", "a las 2", "sí"). */
-    public record Context(String awaiting, int pmPivotHour, boolean modifyMode) {
+    public record Context(String awaiting, int pmPivotHour, boolean modifyMode, boolean hasDraft) {
+        /** Sin borrador activo (por defecto): "cambiar"/"cancelar" bastan para cambiar de flujo. */
+        public Context(String awaiting, int pmPivotHour, boolean modifyMode) {
+            this(awaiting, pmPivotHour, modifyMode, false);
+        }
+
         boolean awaiting(String a) {
             return a != null && a.equals(awaiting);
         }
@@ -145,7 +150,8 @@ public class ReservationIntentExtractor {
         int ordinal = ordinalFrom(n);
 
         boolean wantsAvailability = containsAny(n, "disponibilidad", "hay cupo", "cupos", "hay espacio",
-                "tienen espacio", "tienen mesa", "hay mesa", "queda cupo", "quedan cupos", "hay lugar");
+                "tienen espacio", "tienen mesa", "hay mesa", "queda cupo", "quedan cupos", "hay lugar",
+                "tienen lugar", "quedan lugares", "lugar para", "sitio para", "consigo mesa");
 
         boolean hasData = type != null || date.status() != DateExpressionResolver.Status.NONE
                 || time.hasTime() || time.hasPeriod() || party != null || name != null || receiptPhone != null;
@@ -157,7 +163,7 @@ public class ReservationIntentExtractor {
 
         // normalize() elimina los signos, así que el interrogante se detecta sobre el texto crudo
         boolean questionMark = raw.indexOf('?') >= 0;
-        Intent intent = intentFrom(n, hasData, date, time, party, wantsAvailability, questionMark);
+        Intent intent = intentFrom(n, hasData, date, time, party, wantsAvailability, questionMark, ctx.hasDraft());
 
         return new Extraction(intent, type, date, time, party, name, receiptPhone, number, ordinal,
                 yes, no, discard, wantsAvailability);
@@ -165,16 +171,22 @@ public class ReservationIntentExtractor {
 
     private Intent intentFrom(String n, boolean hasData, DateExpressionResolver.Resolution date,
                               TimeExpressionResolver.Resolution time, Integer party, boolean wantsAvailability,
-                              boolean questionMark) {
+                              boolean questionMark, boolean hasDraft) {
         boolean mentionsReservation = n.contains("reserv");
-        boolean cancelWord = containsAny(n, "cancel", "anular", "eliminar");
-        if (cancelWord && mentionsReservation) return Intent.CANCEL_RESERVATION;
+        boolean cancelWord = containsAny(n, "cancel", "anul", "elimin");
+        // "cancelar"/"quiero cancelar" sin repetir la palabra reserva también cuentan cuando no hay
+        // borrador en curso: antes caía en GENERAL_QUESTION y una FAQ de política de cancelación
+        // secuestraba la conversación en vez de cancelar de verdad.
+        if (cancelWord && (mentionsReservation || (!hasDraft && !questionMark))) return Intent.CANCEL_RESERVATION;
 
         boolean modifyWord = containsAny(n, "cambiar", "modificar", "mover", "pasar", "reprogramar", "aumentar",
                 "agregar", "sumar", "adelantar", "aplazar", "actualizar", "cambio");
-        if (modifyWord && mentionsReservation) return Intent.MODIFY_RESERVATION;
+        // Con borrador activo "cambiar" se refiere al dato que se está pidiendo ("cambiar a 6"),
+        // no a otra reserva: sin la palabra "reserva" el flujo de creación sigue su curso.
+        if (modifyWord && (mentionsReservation || !hasDraft)) return Intent.MODIFY_RESERVATION;
 
         if (containsAny(n, "mi reserva", "mis reservas", "estado de mi reserva", "tengo una reserva",
+                "tengo reserva", "tengo reservas", "ya reserve", "ya hice la reserva", "ya aparte",
                 "numero de reserva", "consultar reserva", "consultar mi reserva", "ver mi reserva")) {
             return Intent.GET_RESERVATION;
         }

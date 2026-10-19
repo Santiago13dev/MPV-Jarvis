@@ -38,10 +38,12 @@ Pipeline order (two phases: DB work under per-phone lock, external calls outside
 8. **5.6**: **Reservation engine** (`ReservationConversationService.handleText`) → create/query/modify/cancel. Returns `REPLY` (answered, stop), `QUESTION_WITH_REMINDER` (answered mid-flow, draft kept) or `NOT_HANDLED` (continue)
 9. **5.62/5.65**: Location / menu-PDF requests
 10. Text-only filter (other media → human)
-11. Welcome message (first message only → no FAQ/AI)
-12. **7A**: Keyword rules (`KeywordMatchingService`)
-13. **7B**: FAQ matching (`FaqMatchingService`)
-14. **9**: AI fallback (OpenAI/Groq)
+11. **7A**: Keyword rules (`KeywordMatchingService`)
+12. **7B**: FAQ matching (`FaqMatchingService`)
+13. **6**: Welcome message — **only if it's still the first message AND it is not a question**
+    (`looksLikeQuestion()`); a question goes to AI instead of returning the greeting. Location is sent with it.
+14. **8.5**: Timeout → transfer to human (skipped on the first message)
+15. **9**: AI fallback (OpenAI/Groq)
 
 Key: the reservation engine and FAQs/keywords run **24/7**. The old business-hours gate (step 8) is commented out — AI works 24/7 too. Message sending happens OUTSIDE the lock with a random 5-10s human delay and max 3 concurrent sends.
 
@@ -189,13 +191,81 @@ docker logs wamvp_whatsapp --tail 20
 
 ### Tests (backend only)
 - `backend/src/test/java/com/whatsappmvp/application/reservation/` — unit tests puros (JUnit 5, sin Spring):
-  `DateExpressionResolverTest` (8), `TimeExpressionResolverTest` (6), `ReservationIntentExtractorTest` (15),
-  `ReservationPricingAndStatusTest` (6) = **35 tests**
+  `DateExpressionResolverTest` (8), `TimeExpressionResolverTest` (6), `ReservationIntentExtractorTest` (20),
+  `ReservationPricingAndStatusTest` (6) = 40 tests
+- `backend/src/test/java/com/whatsappmvp/application/service/FaqMatchingServiceTest` (5, Mockito puro) —
+  scoring de FAQs: plural/singular con límite de palabra, atajo de palabras ≤3, umbral del side-FAQ
 - `backend/src/test/java/com/whatsappmvp/integration/` — `PostgresTestBase` (Testcontainers `postgres:15-alpine`,
   Flyway V1..V9, se omite si no hay Docker), `ReservationServiceIntegrationTest` (22) y
-  `ReservationConversationIntegrationTest` (5, `@SpringBootTest`) = **27 tests**
-- Ejecutar: `mvn test` en `backend/` (las de integración requieren Docker). Total actual: **62 tests, todos en verde**
+  `ReservationConversationIntegrationTest` (5, `@SpringBootTest`) = 27 tests
+- Ejecutar: `mvn test` en `backend/` (las de integración requieren Docker).
+  Total actual: **45 unit + 27 integración = 72 tests, todos en verde**
 - Sin CI. Frontend sin setup de tests (no hay target `ng test` ni specs). Sin tests de controllers REST ni del pipeline `MessageProcessingService`.
+
+---
+
+## Reservation Engine — Hardening E2E (última sesión)
+
+Batería de ~90 mensajes de clientes reales enviados al webhook (`POST /api/webhook/message`, header
+`X-Webhook-Secret: devsecret`) contra un backend local con la BD de Docker (`wamvp_postgres`), leyendo las
+respuestas con `psql`. Reportes: `/tmp/opencode/matrix_report.txt`, `/tmp/opencode/matrix_extra*.log`
+(los scripts viven en `/tmp/opencode/*.py` y **se borran al limpiar /tmp** — se recrean en ~10 min si hace falta).
+
+### Bugs encontrados y corregidos (todos verificados E2E)
+
+| Sintoma del cliente | Causa raiz | Fix |
+|---|---|---|
+| Primer mensaje "¿hacen domicilios?" → solo el saludo | PASO 6 (bienvenida) estaba ANTES de keywords/FAQ y hacía `return` | 7A/7B ahora van antes; si es pregunta sin match → pasa a IA (nunca saludo) — `looksLikeQuestion()` |
+| "reserva para 10 y voy con mi perro" solo preguntaba el día | El motor de reservas se tragaba la pregunta lateral | side-FAQ en el `REPLY`: `FaqMatchingService.findMatch(msg, exclude, 3)` + `isReservationFaq()` |
+| "no puedo asistir, quiero cancelar" → FAQ de política secuestraba el flujo | `intentFrom` exigía `cancelWord && mentionsReservation` | `cancelWord && (mentionsReservation \|\| (!hasDraft && !questionMark))` |
+| "quiero cambiar a 6 personas" → FAQ de política | ídem con `modifyWord` | `modifyWord && (mentionsReservation \|\| !hasDraft)`; `Context` ahora lleva `hasDraft` |
+| "¿me devuelven el dinero si cancelo?" entraba al flujo de cancelar | cancel demasiado agresivo sin `questionMark` | regla de arriba (`!questionMark`) |
+| "ya pagué, ¿me confirmas?" sin reserva → FAQ decía "Tu reserva ha quedado confirmada" (mentira) | `PAYMENT_RECEIPT` devolvía `notHandled` y caía en FAQ | `start()` PAYMENT_RECEIPT → `askReceiptImage` / `noPendingPayment` / `noReservations` |
+| "reserva para 0" / "para 50" esperaban hasta pedir la fecha | no había validacion temprana | `advanceCreate`: `partySize < 1` → `msg.partyInvalid()`; `> maxPartySize` → `handToHuman(msg.partyTooLarge)` |
+| "tengo reserva a las 12" → creaba una reserva nueva | frase no estaba en `GET_RESERVATION` | agregadas "tengo reserva(s)", "ya reserve", "ya hice la reserva", "ya aparte" |
+| "¿hacen domicilios?" no matcheaba keyword "domicilio" | singular/plural solo sumaba +1 | plural/singular con límite de palabra (+3) + raíz de 5 letras (+2) |
+| "reserva para 4 mediodía" → recibía la FAQ de horarios pegada | el singular derivado "dia" (3 letras) entraba por `contains()` dentro de "mediodia" | formas derivadas SIEMPRE con `matchesWholeWord()` (sin atajo ≤3); side-FAQ exige score ≥3 |
+| Tabla `reservation_drafts` crecía sin limite (76 filas en 1h de pruebas) | nadie borraba borradores de chats abandonados | `ReservationExpirationJob.purgeExpiredDrafts()` (cada 60s, TTL 30 min) |
+
+### Flujos verificados end-to-end
+Crear (1 mensaje y por pasos), confirmar → `#`, modificar + confirmar cambio (precio recalculado),
+cancelar con frase sin "reserva" y con confirmación sí/no, "no" en la confirmación, cancelar a mitad de creación,
+disponibilidad por día/personas, VIP (precio fijo por slot), día cerrado/fecha pasada, grupos >40 → asesor,
+personas 0/negativas, pregunta de perro en medio del flujo (`QUESTION_WITH_REMINDER`), consultas de reserva
+(`GET_RESERVATION`), comprobante "ya pagué" con y sin reserva pendiente, FAQ (wifi, domicilios, factura,
+medios de pago, música, parqueadero, mascota, política de cancelación, horarios).
+
+### Criterio de "excelente" para la demo
+- Todo lo de arriba responde bien; lo que queda **pendiente de re-verificar** (1 pasada de 90s):
+  caso "reserva para 4 mediodía" E2E (ya cubierto por unit test) y regresión de side-FAQ "perro".
+- IA local **sin `GROQ_API_KEY`** → contesta "En este momento no puedo procesar tu consulta…" (processed_by=AI).
+  En el VPS sí hay key. Si la demo es local, exportar la key antes de arrancar.
+- La BD local tiene **19 FAQs** (cargadas con `backend/scripts/faq_backup.sql`, que hace `DELETE FROM faq_items`);
+  producción tiene 73. Casos como "¿cuánto cuesta el espacio VIP?" no tienen FAQ local y caen a IA.
+- Bug conocido (bajo): "¿me dan un descuento por mi cumpleaños?" empatan promo vs decoración y gana decoración
+  (tie-break por prioridad). Arreglar si se ve en la demo.
+
+### Cómo levantar el backend local (WSL, sin Docker CLI)
+```bash
+# 1) proxy TCP a Docker Desktop (una vez por sesión; sin esto Testcontainers/psql no conectan)
+docker.exe run --rm -d --name tc-proxy -p 2375:2375 \
+  -v /var/run/docker.sock:/var/run/docker.sock alpine/socat \
+  TCP-LISTEN:2375,fork,reuseaddr,bind=0.0.0.0 UNIX-CONNECT:/var/run/docker.sock
+
+# 2) backend local (¡ usar setsid: si no, la tool mata el proceso al hacer timeout !)
+cd backend && setsid bash -c '
+  JAVA_HOME=/mnt/c/Users/kevin/.jdks/temurin-17 \
+  SPRING_DATASOURCE_URL=jdbc:postgresql://172.25.96.1:5432/whatsapp_mvp \
+  UPLOADS_PATH=/tmp/opencode/uploads \
+  exec /mnt/c/Herramientas/apache-maven-3.9.6/bin/mvn -B spring-boot:run > /tmp/opencode/backend.log 2>&1
+' < /dev/null > /dev/null 2>&1 &
+
+# 3) salud: curl localhost:8080/actuator/health  (arranca en ~40-60s)
+# psql: docker.exe exec -i wamvp_postgres psql -U wamvp_user -d whatsapp_mvp -c "..."
+```
+**Trampas**: `pkill -f "spring-boot:run"` mata la shell propia (el patrón está en la línea de comando — usar
+`ps -eo pid,args | grep -E "[s]pring..."`); integración de Docker WSL está desactivada → `docker` no existe
+(solo `docker.exe`); login de prueba `admin@example.com / admin123`.
 
 ---
 
@@ -278,6 +348,16 @@ docker compose -f docker-compose.prod.yml down -v
 
 - [x] Verify reservation flow end-to-end (test "reservar" → "SI" → data)
 - [x] 62 automated tests for the reservation engine (unit + Testcontainers integration)
+- [x] Hardening E2E del motor de reservas: ~90 mensajes de cliente, 10 bugs corregidos (ver
+      "Reservation Engine — Hardening E2E")
+- [ ] **Última pasada E2E** (90s, backend local): caso "reserva para 4 mediodía" (sin FAQ de horarios pegada)
+      + regresión del side-FAQ "perro" — la lógica ya está en unit test (`FaqMatchingServiceTest`)
+- [ ] **Commit pendiente** (8+2 archivos sin commitear: `MessageProcessingService`, `FaqMatchingService`,
+      `ReservationIntentExtractor`, `ReservationConversationService`, `ReservationMessages`,
+      `ReservationExpirationJob`, `ReservationDraftJpaRepository` + tests)
+- [ ] `GROQ_API_KEY` en local si la demo se hace sin VPS (si no, la IA contesta el fallback genérico)
+- [ ] Cargar las 73 FAQs de producción en local (`faq_backup.sql` solo trae 19)
+- [ ] Tie-break de FAQs con score empatado ("descuento" vs "cumpleaños")
 - [ ] Tests for REST controllers (`ReservationController`, `ReservationConfigController`) and `MessageProcessingService`
 - [ ] Frontend test setup (karma/jasmine) + specs for `reservations.component.ts`
 - [ ] CI so `mvn test` runs on every push

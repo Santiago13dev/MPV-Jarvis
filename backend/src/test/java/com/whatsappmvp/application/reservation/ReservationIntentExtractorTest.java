@@ -74,6 +74,51 @@ class ReservationIntentExtractorTest {
     }
 
     @Test
+    void cancelWithoutRepeatingTheWordReservation() {
+        assertThat(extractor.extract("No puedo asistir, quiero cancelar", FREE).intent())
+                .isEqualTo(Intent.CANCEL_RESERVATION);
+        assertThat(extractor.extract("cancela", FREE).intent()).isEqualTo(Intent.CANCEL_RESERVATION);
+        assertThat(extractor.extract("mejor anulemos", FREE).intent()).isEqualTo(Intent.CANCEL_RESERVATION);
+    }
+
+    @Test
+    void availabilityQuestionsWithoutTheWordCupo() {
+        assertThat(extractor.extract("Tienen lugar para el sábado", FREE).wantsAvailability()).isTrue();
+        assertThat(extractor.extract("¿Quedan lugares?", FREE).wantsAvailability()).isTrue();
+        assertThat(extractor.extract("Lugar para 4 personas", FREE).wantsAvailability()).isTrue();
+    }
+
+    @Test
+    void changingAFieldMidDraftIsNotATopicSwitch() {
+        Context drafting = new Context("PARTY_SIZE", 11, false, true);
+        assertThat(extractor.extract("quiero cambiar a 6", drafting).intent()).isEqualTo(Intent.NONE);
+        assertThat(extractor.extract("quiero cambiar la reserva a 6", drafting).intent())
+                .isEqualTo(Intent.MODIFY_RESERVATION);
+        // sin borrador, "cambiar a 6" es la reserva existente la que quiere tocar
+        assertThat(extractor.extract("quiero cambiar a 6", FREE).intent()).isEqualTo(Intent.MODIFY_RESERVATION);
+        // y "cancelar" sin borrador también cambia de flujo (sin secuestrar la política de cancelación)
+        assertThat(extractor.extract("mejor cancela eso", FREE).intent()).isEqualTo(Intent.CANCEL_RESERVATION);
+    }
+
+    @Test
+    void aQuestionAboutCancellationPolicyIsNotAnAttemptToCancel() {
+        // "¿me devuelven el dinero si cancelo?" es una consulta de política → FAQ, no flujo de cancelación
+        assertThat(extractor.extract("¿me devuelven el dinero si cancelo?", FREE).intent())
+                .isEqualTo(Intent.GENERAL_QUESTION);
+        // pero la intención sí es cancelar
+        assertThat(extractor.extract("no puedo asistir, quiero cancelar", FREE).intent())
+                .isEqualTo(Intent.CANCEL_RESERVATION);
+    }
+
+    @Test
+    void askingForTheReservationNumberIsNotCreatingOne() {
+        assertThat(extractor.extract("tengo reserva a las 12", FREE).intent())
+                .isEqualTo(Intent.GET_RESERVATION);
+        assertThat(extractor.extract("ya reservé, ¿me pasas el número?", FREE).intent())
+                .isEqualTo(Intent.GET_RESERVATION);
+    }
+
+    @Test
     void shortAnswersDependOnWhatTheBotAsked() {
         assertThat(extractor.extract("cinco", new Context("PARTY_SIZE", 11, false)).partySize()).isEqualTo(5);
         assertThat(extractor.extract("Kevin Perez", new Context("NAME", 11, false)).customerName())

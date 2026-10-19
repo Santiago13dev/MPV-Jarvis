@@ -114,7 +114,7 @@ public class ReservationConversationService {
         ReservationDraftEntity draft = activeDraft(conv.getId()).orElse(null);
 
         Context ctx = new Context(draft != null ? draft.getAwaiting() : null, pivot,
-                draft != null && draft.getMode() == Mode.MODIFY);
+                draft != null && draft.getMode() == Mode.MODIFY, draft != null);
         Extraction x = extractor.extract(text, ctx);
         // El LLM solo entra cuando hay un borrador abierto y las reglas locales no entendieron nada
         if (draft != null && x.isEmpty()) {
@@ -201,10 +201,14 @@ public class ReservationConversationService {
             case CANCEL_RESERVATION -> startManage(conv, phone, x, s, false);
             case GET_RESERVATION -> showReservations(phone, x);
             case PAYMENT_RECEIPT -> {
-                boolean awaitingPayment = reservationService.findUpcomingActiveByPhone(phone).stream()
+                List<ReservationEntity> upcoming = reservationService.findUpcomingActiveByPhone(phone);
+                boolean awaitingPayment = upcoming.stream()
                         .anyMatch(r -> r.getStatus() == ReservationStatus.PENDING
                                 || r.getStatus() == ReservationStatus.PAYMENT_PENDING);
-                yield awaitingPayment ? Result.reply(msg.askReceiptImage()) : Result.notHandled();
+                // Sin reserva pendiente no se puede pedir comprobante: se contesta con lo que sí aplica
+                // (nunca "quedó confirmada": eso lo dice una FAQ y sería mentirle al cliente).
+                yield awaitingPayment ? Result.reply(msg.askReceiptImage())
+                        : Result.reply(!upcoming.isEmpty() ? msg.noPendingPayment() : msg.noReservations());
             }
             default -> Result.notHandled();
         };
@@ -283,6 +287,17 @@ public class ReservationConversationService {
 
         if (x.date().status() == DateExpressionResolver.Status.AMBIGUOUS) {
             return ask(d, A_DATE, msg.askDateAmbiguous(x.date().note()));
+        }
+
+        // Personas inválidas o grupo demasiado grande: se resuelve ANTES de seguir preguntando
+        // ("reserva para 0" / "para 50" no deben llegar hasta que se pide la fecha).
+        if (d.getPartySize() != null && d.getPartySize() < 1) {
+            d.setPartySize(null);
+            return ask(d, A_PARTY, msg.partyInvalid());
+        }
+        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : Integer.MAX_VALUE;
+        if (d.getPartySize() != null && d.getPartySize() > maxParty) {
+            return handToHuman(d, conv, msg.partyTooLarge(maxParty));
         }
 
         // ¿Qué falta? Solo se pregunta lo que no se sabe

@@ -215,6 +215,19 @@ public class ReservationMessages {
         return "hasta el " + date(exp.toLocalDate()) + " a las " + t;
     }
 
+    // ── Validaciones antes de tener fecha ──────────────────────────────────
+
+    /** Número de personas inválido (0 o negativo) todavía sin fecha. */
+    public String partyInvalid() {
+        return "Necesito un número de personas válido (mínimo 1). ¿Para cuántas personas sería?";
+    }
+
+    /** Grupo mayor al máximo permitido, todavía sin fecha → asesor humano. */
+    public String partyTooLarge(int max) {
+        return "Para grupos de más de " + max + " personas lo mejor es que te ayude un asesor del restaurante. "
+                + "¿Quieres que te comunique con uno?";
+    }
+
     // ── Rechazos del backend → texto humano ───────────────────────────────
 
     /** Traduce el resultado del backend (motivo + alternativas reales) a una respuesta natural. */
@@ -359,6 +372,12 @@ public class ReservationMessages {
 
     public String askReceiptImage() {
         return "Claro, envíame aquí la foto o captura del comprobante de pago y la asocio a tu reserva.";
+    }
+
+    /** El cliente dice "ya pagué" pero no tiene nada pendiente de pago. */
+    public String noPendingPayment() {
+        return "No veo reservas pendientes de pago a tu nombre. Si ya pagaste, comparte el comprobante "
+                + "con un asesor para que la marque como confirmada. 😊";
     }
 
     public String noReservationForReceipt() {
