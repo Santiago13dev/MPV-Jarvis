@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 
 /**
- * Única fuente de verdad del precio. NORMAL = precio × personas. VIP = precio fijo por el espacio completo.
+ * Única fuente de verdad del precio. NORMAL = precio fijo por reserva. VIP = precio fijo por el espacio completo.
  * El LLM jamás calcula ni decide el total.
  */
 @Component
@@ -18,7 +18,7 @@ public class ReservationPricing {
         if (type == ReservationType.VIP) {
             return new PriceQuote(type, partySize, s.getVipPrice(), s.getVipPrice(), false);
         }
-        BigDecimal unit = s.getNormalPrice();
-        return new PriceQuote(type, partySize, unit, unit.multiply(BigDecimal.valueOf(partySize)), true);
+        BigDecimal fixed = s.getNormalPrice();
+        return new PriceQuote(type, partySize, fixed, fixed, false);
     }
 }

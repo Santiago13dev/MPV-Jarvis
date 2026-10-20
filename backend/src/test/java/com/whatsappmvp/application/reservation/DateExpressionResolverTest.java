@@ -63,6 +63,13 @@ class DateExpressionResolverTest {
     }
 
     @Test
+    void weekdayPlusExplicitDateUsesTheExplicitDate() {
+        assertThat(onMonday.resolve("el lunes 2 de noviembre").date()).isEqualTo(LocalDate.of(2026, 11, 2));
+        assertThat(onMonday.resolve("lunes 9 de noviembre").date()).isEqualTo(LocalDate.of(2026, 11, 9));
+        assertThat(onMonday.resolve("el sábado 31 de octubre").date()).isEqualTo(LocalDate.of(2026, 10, 31));
+    }
+
+    @Test
     void weekendOrSeveralDaysIsAmbiguousSoTheBotAsks() {
         var weekend = onMonday.resolve("este fin de semana");
         assertThat(weekend.status()).isEqualTo(Status.AMBIGUOUS);

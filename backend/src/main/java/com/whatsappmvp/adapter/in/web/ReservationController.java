@@ -105,7 +105,7 @@ public class ReservationController {
             @PathVariable UUID id, @Valid @RequestBody ReservationUpdateRequest req, Authentication auth) {
         Outcome outcome = reservationService.modify(id, new ModifyCommand(
                 req.getDate(), req.getTime(), req.getPartySize(), req.getReservationType(),
-                null, Actor.admin(auth.getName())));
+                req.getCustomerName(), req.getNotes(), null, Actor.admin(auth.getName())));
         return respond(outcome, outcome.unchanged() ? "Sin cambios" : "Reserva actualizada");
     }
 

@@ -15,12 +15,12 @@ class ReservationPricingAndStatusTest {
     // ── Precios: los calcula el backend, nunca el LLM ─────────────────────
 
     @Test
-    void normalIsPricePerPerson() {
+    void normalIsAFlatPricePerReservation_notPerPerson() {
         for (int people : new int[]{1, 2, 5, 10}) {
             var q = pricing.quote(ReservationType.NORMAL, people, settings);
             assertThat(q.unitPrice()).isEqualByComparingTo("40000");
-            assertThat(q.totalPrice()).isEqualByComparingTo(String.valueOf(40_000 * people));
-            assertThat(q.perPerson()).isTrue();
+            assertThat(q.totalPrice()).isEqualByComparingTo("40000");
+            assertThat(q.perPerson()).isFalse();
         }
     }
 

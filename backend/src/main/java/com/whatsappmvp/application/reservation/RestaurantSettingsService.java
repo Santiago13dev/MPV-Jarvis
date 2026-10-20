@@ -31,10 +31,10 @@ public class RestaurantSettingsService {
 
     /** Campos null = sin cambio (PATCH). */
     public record SettingsUpdate(BigDecimal normalPrice, BigDecimal vipPrice, Integer vipCapacity,
-                                 Set<DayOfWeek> operatingDays, LocalTime reservationStartTime,
-                                 LocalTime reservationEndTime, Integer slotIntervalMinutes,
-                                 Integer defaultSlotCapacity, Integer maxPartySize, Integer holdMinutes,
-                                 Boolean vipConsumesNormalCapacity, String paymentInstructions) {}
+                                 Set<DayOfWeek> operatingDays, Boolean openOnHolidayMondays,
+                                 LocalTime reservationStartTime, LocalTime reservationEndTime,
+                                 Integer slotIntervalMinutes, Integer defaultSlotCapacity, Integer maxPartySize,
+                                 Integer holdMinutes, Boolean vipConsumesNormalCapacity, String paymentInstructions) {}
 
     @Transactional
     public RestaurantSettingsEntity get() {
@@ -61,6 +61,7 @@ public class RestaurantSettingsService {
             if (u.operatingDays().isEmpty()) throw new BusinessException("Debe haber al menos un día de operación");
             s.setOperatingDaysSet(u.operatingDays());
         }
+        if (u.openOnHolidayMondays() != null) s.setOpenOnHolidayMondays(u.openOnHolidayMondays());
         if (u.reservationStartTime() != null) s.setReservationStartTime(u.reservationStartTime());
         if (u.reservationEndTime() != null) s.setReservationEndTime(u.reservationEndTime());
         if (s.getReservationEndTime().isBefore(s.getReservationStartTime())) {

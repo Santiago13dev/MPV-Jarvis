@@ -46,6 +46,11 @@ public class RestaurantSettingsEntity {
     @Builder.Default
     private String operatingDays = "SATURDAY,SUNDAY";
 
+    /** Si TRUE, también se abren los lunes festivos del calendario colombiano. */
+    @Column(name = "open_on_holiday_mondays", nullable = false)
+    @Builder.Default
+    private Boolean openOnHolidayMondays = true;
+
     @Column(name = "reservation_start_time", nullable = false)
     @Builder.Default
     private LocalTime reservationStartTime = LocalTime.of(11, 30);

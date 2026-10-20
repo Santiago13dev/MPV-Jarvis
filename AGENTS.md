@@ -80,15 +80,19 @@ Transiciones validadas por `canTransitionTo()`; invalidas → excepción.
   (clave de idempotencia `wa:<waMessageId>`)
 - Consulta VIP suelta (`¿tienen VIP?`, `¿cuánto cuesta el VIP?`) → `GENERAL_QUESTION` con `type=VIP`:
   responde capacidad/precio (`ReservationMessages.vipInfo()`) y abre un borrador `CREATE` VIP para seguir el flujo
+- VIP ocupado: si ya hay una reserva VIP activa ese día, no se ofrecen otras franjas; se responde que ya
+  está reservado y se ofrece un asesor (`HUMAN_TRANSFER_OFFERED`).
 
 **Motor de negocio (`ReservationService` — única vía de escritura)**
-- Cupo por slot con `pg_advisory_xact_lock` (concurrencia segura), doble chequeo de idempotencia
-- Precios: NORMAL = por persona, VIP = precio fijo por espacio (exclusivo por slot, no consume cupo NORMAL)
+- Cupo normal por slot con `pg_advisory_xact_lock`; el VIP además toma un lock por día (concurrencia segura), doble chequeo de idempotencia
+- Precios: NORMAL = valor fijo por reserva ($40.000 por defecto), VIP = valor fijo por espacio ($100.000 por defecto; **un solo espacio VIP por día**, no consume cupo NORMAL)
 - Crear / modificar (libera slot viejo, recalcula precio) / cancelar (soft, idempotente) / confirmar /
   recibo de pago (aceptar/rechazar) / expirar hold
 - Auditoría (`reservation_audit_log`) + eventos Spring (`ReservationNotificationService`)
 - Configuración admin: precios, días/horas operativos, intervalo de slots, capacidad, reglas por día/hora,
   bloqueos de fecha/slot (`RestaurantSettingsService` + `/api/reservations/configuration`)
+- Calendario: sábados/domingos configurados + **lunes festivos** de Colombia (`ColombianHolidays`).
+  `open_on_holiday_mondays` (default TRUE) se edita desde el dashboard; los lunes normales siguen cerrados.
 
 **Extracción de intención/datos (`ReservationIntentExtractor`)**
 - Reglas primero (gratis, cubre fechas/horas/nombres en español vía `DateExpressionResolver`/`TimeExpressionResolver`),
@@ -137,8 +141,17 @@ docker logs wamvp_whatsapp --tail 20
 - `V8__add_people_count_to_reservations.sql` — `people_count` on reservations
 - `V9__reservation_engine.sql` — engine del módulo: `restaurant_settings` (singleton), `slot_capacity_rules`,
   `reservation_blocks`, columnas nuevas de `reservations` (type/slot/prices/hold/idempotency_key/
-  reservation_number/audit), índices únicos parciales (VIP por slot, idempotency key), `reservation_audit_log`,
+  reservation_number/audit), índices únicos parciales (VIP por slot en V9; V12 lo reemplaza por uno por día, idempotency key), `reservation_audit_log`,
   `reservation_receipts`, `reservation_drafts`. No destructiva.
+- `V10__fix_generic_faq_seed.sql` — corrige **condicionalmente** las FAQs genéricas de V2 (horario
+  “lunes a viernes 8am–6pm”, medios de pago y pedidos) y agrega 5 FAQs oficiales que faltaban
+  (factura, política de cancelación, capacidad, música, espera). Si producción ya tiene una respuesta
+  propia, no la toca; es segura para desplegar.
+- `V11__add_holiday_mondays_setting.sql` — agrega `restaurant_settings.open_on_holiday_mondays`
+  (BOOLEAN NOT NULL DEFAULT TRUE). No destructiva; permite abrir/cerrar los lunes festivos desde el dashboard.
+- `V12__one_vip_per_day.sql` — reemplaza el índice único VIP por franja por uno por día (el VIP es un solo
+  espacio físico). Si ya hubiera VIP activos duplicados el mismo día, omite el índice único para no romper
+  el despliegue; la aplicación los sigue bloqueando con un lock por día.
 
 ### Key Tables
 - `conversations` → `pending_action` (VARCHAR 50) y `pending_action_data` (TEXT/JSON). Hoy solo se usa para `HUMAN_TRANSFER_OFFERED`
@@ -146,10 +159,37 @@ docker logs wamvp_whatsapp --tail 20
 - `reservation_drafts` → estado conversacional (UNIQUE `conversation_id`, `mode` CREATE/MODIFY/CANCEL, `awaiting`)
 - `reservation_receipts` → comprobantes de pago subidos por WhatsApp o dashboard
 - `reservation_audit_log` → auditoría de toda escritura
-- `restaurant_settings` → singleton de precios/horarios/capacidad
+- `restaurant_settings` → singleton de precios/horarios/capacidad; `open_on_holiday_mondays` controla los lunes festivos
 - `slot_capacity_rules`, `reservation_blocks` → reglas de cupo por día/hora y bloqueos
-- `faq_items` → 73 items configured via admin API (reservation FAQs with keywords: reservar, reserva, mesa, cita, apartar)
+- `faq_items` → 73 items configured via admin API en producción. En local se cargan 73 FAQs oficiales de
+  respaldo con `python3 scripts/seed_faqs_full.py --update` (idempotente; no borra filas). Quedan 6 filas
+  legacy de la semilla con pregunta distinta (mismo tema); son de prioridad baja y no ganan el matching.
 - `keyword_rules` → empty by default, created via admin API
+
+### FAQs: backup local vs. 73 de producción
+- `backend/scripts/faq_backup.sql` **NO es el backup de las 73**: tiene 19 filas viejas (2026-07-29) e
+  incluye datos incorrectos (“viernes a domingo 11PM”, “cuando juega colombia”, “50% de descuento”).
+  No restaurarlo en la demo.
+- `backend/scripts/seed-faqs.js` y `seed-restaurant.sql` son semillas parciales (16/19), no las 73.
+- Las 73 exactas de producción no están versionadas. Para recuperarlas, con el VPS accesible (a hoy
+  `147.93.58.156` responde en 22/80/443, pero la app está caída y nginx muestra la página por defecto):
+  ```bash
+  cd /opt/MPV-Jarvis
+  # SOLO Postgres; NUNCA `down -v`
+  docker compose -f docker-compose.prod.yml up -d postgres
+  docker exec -i wamvp_postgres pg_dump -U wamvp_user -d whatsapp_mvp \
+    -t faq_items --data-only --column-inserts > /tmp/faq_items.sql
+  wc -l /tmp/faq_items.sql
+  ```
+  Luego traer el archivo y, en local, respaldar la tabla actual y reemplazarla:
+  ```bash
+  docker compose exec -T postgres pg_dump -U wamvp_user -d whatsapp_mvp -t faq_items \
+    --data-only --column-inserts > /tmp/faq_local_actual.sql
+  docker compose exec -T postgres psql -U wamvp_user -d whatsapp_mvp -c "TRUNCATE faq_items;"
+  docker compose exec -T postgres psql -U wamvp_user -d whatsapp_mvp < /tmp/faq_items.sql
+  ```
+  `TRUNCATE` solo en local; en producción está prohibido. Si no hay SSH, el mismo dump se puede ejecutar
+  desde la terminal web de Hostinger y pegar el SQL.
 
 ---
 
@@ -166,6 +206,8 @@ docker logs wamvp_whatsapp --tail 20
 - `backend/src/main/java/com/whatsappmvp/application/reservation/ReservationIntentExtractor.java` — Rules + LLM intent/data extraction
 - `backend/src/main/java/com/whatsappmvp/application/reservation/ReservationAvailabilityService.java` — Slot capacity / availability
 - `backend/src/main/java/com/whatsappmvp/application/reservation/RestaurantSettingsService.java` — Settings, capacity rules, blocks
+- `backend/src/main/java/com/whatsappmvp/application/reservation/ReservationCalendarService.java` — Calendario: días operativos, lunes festivos, franjas y bloqueos
+- `backend/src/main/java/com/whatsappmvp/application/reservation/ColombianHolidays.java` — Festivos colombianos calculados (fijos, Ley Emiliani y Semana Santa)
 - `backend/src/main/java/com/whatsappmvp/application/reservation/ReservationMessages.java` — All customer-facing texts
 - `backend/src/main/java/com/whatsappmvp/application/service/ReservationService.java` — Single write path: create/modify/cancel/confirm/receipts/expire, advisory locks, audit
 - `backend/src/main/java/com/whatsappmvp/application/service/BusinessHoursService.java` — `isWithinBusinessHours()` checks DB `business_hours` by day-of-week
@@ -182,7 +224,8 @@ docker logs wamvp_whatsapp --tail 20
 - `backend/src/main/java/com/whatsappmvp/infrastructure/persistence/entity/ConversationEntity.java` — Has `pendingAction`, `pendingActionData`
 - `backend/src/main/java/com/whatsappmvp/infrastructure/persistence/entity/ReservationEntity.java` — Reservation model
 - `backend/src/main/resources/system-prompt.txt` — System prompt for "La Montaña del Bendito Chicharrón"
-- `backend/src/main/resources/db/migration/V9__reservation_engine.sql` — Latest migration
+- `backend/src/main/resources/db/migration/V12__one_vip_per_day.sql` — Latest migration
+- `scripts/seed_faqs_full.py` — carga/actualiza las 73 FAQs oficiales de respaldo en local (idempotente)
 
 ### Angular Frontend
 - `frontend/src/app/features/whatsapp/whatsapp-status.component.ts` — QR display + "Reiniciar sesión" button
@@ -194,15 +237,23 @@ docker logs wamvp_whatsapp --tail 20
 
 ### Tests (backend only)
 - `backend/src/test/java/com/whatsappmvp/application/reservation/` — unit tests puros (JUnit 5, sin Spring):
-  `DateExpressionResolverTest` (8), `TimeExpressionResolverTest` (6), `ReservationIntentExtractorTest` (20),
-  `ReservationPricingAndStatusTest` (6) = 40 tests
-- `backend/src/test/java/com/whatsappmvp/application/service/FaqMatchingServiceTest` (5, Mockito puro) —
-  scoring de FAQs: plural/singular con límite de palabra, atajo de palabras ≤3, umbral del side-FAQ
+  `DateExpressionResolverTest` (9), `TimeExpressionResolverTest` (6), `ReservationIntentExtractorTest` (20),
+  `ReservationPricingAndStatusTest` (6), `ColombianHolidaysTest` (5, festivos fijos/Ley Emiliani/Semana Santa)
+  y `ReservationCalendarServiceTest` (3, lunes festivos vs. lunes normales) = 49 tests
+- `backend/src/test/java/com/whatsappmvp/application/service/FaqMatchingServiceTest` (7, Mockito puro) —
+  scoring de FAQs: plural/singular con límite de palabra, atajo de palabras ≤3, umbral del side-FAQ y
+  keywords multi-palabra (no deben matchear por el prefijo de la primera palabra)
 - `backend/src/test/java/com/whatsappmvp/integration/` — `PostgresTestBase` (Testcontainers `postgres:15-alpine`,
-  Flyway V1..V9, se omite si no hay Docker), `ReservationServiceIntegrationTest` (22) y
-  `ReservationConversationIntegrationTest` (5, `@SpringBootTest`) = 27 tests
+  Flyway V1..V12, se omite si no hay Docker), `ReservationServiceIntegrationTest` (23, incluye lunes festivo)
+  y `ReservationConversationIntegrationTest` (5, `@SpringBootTest`) = 28 tests
 - Ejecutar: `mvn test` en `backend/` (las de integración requieren Docker).
-  Total actual: **45 unit + 27 integración = 72 tests, todos en verde**
+  En macOS con Docker Desktop, Testcontainers puede quedar skipped por el socket
+  (`~/.docker/run/docker.sock`); en ese caso correr las baterías E2E que usan la BD real.
+  Total actual: **56 unit en verde**; 28 de integración compilan y quedan skipped en este entorno.
+- Baterías locales (backend + BD Docker):
+  - `python3 scripts/test_reservation_full.py` → **171/171**
+  - `python3 scripts/test_dashboard_config.py` → **46/46**
+  - `python3 scripts/test_ai_cases.py` → **17/17** (requiere `GROQ_API_KEY` en `.env`)
 - Sin CI. Frontend sin setup de tests (no hay target `ng test` ni specs). Sin tests de controllers REST ni del pipeline `MessageProcessingService`.
 
 ---
@@ -233,7 +284,7 @@ respuestas con `psql`. Reportes: `/tmp/opencode/matrix_report.txt`, `/tmp/openco
 ### Flujos verificados end-to-end
 Crear (1 mensaje y por pasos), confirmar → `#`, modificar + confirmar cambio (precio recalculado),
 cancelar con frase sin "reserva" y con confirmación sí/no, "no" en la confirmación, cancelar a mitad de creación,
-disponibilidad por día/personas, VIP (precio fijo por slot), día cerrado/fecha pasada, grupos >40 → asesor,
+disponibilidad por día/personas, VIP (un solo espacio por día; si está ocupado → asesor), día cerrado/fecha pasada, grupos >40 → asesor,
 personas 0/negativas, pregunta de perro en medio del flujo (`QUESTION_WITH_REMINDER`), consultas de reserva
 (`GET_RESERVATION`), comprobante "ya pagué" con y sin reserva pendiente, FAQ (wifi, domicilios, factura,
 medios de pago, música, parqueadero, mascota, política de cancelación, horarios).
@@ -243,8 +294,13 @@ medios de pago, música, parqueadero, mascota, política de cancelación, horari
   VIP, modificación y cancelación. Ver "Pending / Future Work".
 - IA local **sin `GROQ_API_KEY`** → contesta "En este momento no puedo procesar tu consulta…" (processed_by=AI).
   En el VPS sí hay key. Si la demo es local, exportar la key antes de arrancar.
-- La BD local tiene **7 FAQs** (producción tiene 73). Casos como "¿cuánto cuesta el espacio VIP?" ya no
-  dependen de FAQ: el motor responde `vipInfo()` directamente.
+- La BD local tiene **73 FAQs oficiales de respaldo** (cargadas con `scripts/seed_faqs_full.py`), no
+  necesariamente las mismas 73 de producción. Casos como "¿cuánto cuesta el espacio VIP?" no dependen de
+  FAQ: el motor responde `vipInfo()` directamente (y la FAQ de VIP se excluye del side-FAQ).
+- Bug corregido: una keyword multi-palabra como `parqueadero para motos` matcheaba por el prefijo de la
+  primera palabra (`parqu...`) y le robaba la FAQ general de parqueadero. Ahora el atajo de prefijo solo
+  aplica a keywords de una palabra. Esto también evitó que la FAQ de “cancelar reserva” le ganara a la de
+  “política de cancelación” por compartir el prefijo `cance`.
 - Bug conocido (bajo): "¿me dan un descuento por mi cumpleaños?" empatan promo vs decoración y gana decoración
   (tie-break por prioridad). Arreglar si se ve en la demo.
 
@@ -374,16 +430,25 @@ docker compose -f docker-compose.prod.yml down -v
 ## Pending / Future Work
 
 - [x] Verify reservation flow end-to-end (test "reservar" → "SI" → data)
-- [x] 72 automated tests for the reservation engine (45 unit + 27 Testcontainers integration)
+- [x] 84 tests del motor de reservas (56 unit + 28 Testcontainers; los 28 de integración quedan skipped en macOS)
 - [x] Hardening E2E del motor de reservas: ~90 mensajes de cliente, 10 bugs corregidos (ver
       "Reservation Engine — Hardening E2E")
-- [x] **Última pasada E2E (2026-10-19, local macOS)**: VIP info/creación/bloqueo duplicado, normal,
-      modificación 5→6 ($240.000), cancelación + liberación de franja VIP, "reserva para 4 mediodía"
-      y side-FAQ "perro"/"wifi" con recordatorio. 45 unit tests en verde.
-- [ ] **Commit pendiente** (fix VIP + delay configurable + proxy nginx + tooling local `dev-*.sh`;
-      ver `git status`)
+- [x] **Lunes festivos (2026-10-19)**: calendario colombiano (`ColombianHolidays`), configuración
+      `open_on_holiday_mondays` en dashboard, V11 y fix del resolver para “lunes 2 de noviembre”.
+      E2E 171/171, dashboard 46/46, IA 17/17 y 56 unit en verde.
+- [x] **Última pasada E2E (2026-10-19, local macOS)**: VIP info/creación, un solo VIP por día (si está
+      ocupado se ofrece asesor), normal,
+      modificación 5→6 (precio fijo $40.000), cancelación + liberación del día VIP, "reserva para 4 mediodía"
+      y side-FAQ "perro"/"wifi" con recordatorio.
+- [x] **73 FAQs oficiales de respaldo en local** (`scripts/seed_faqs_full.py --update`) y fix del matcher
+      para keywords multi-palabra; baterías 171/171 (E2E), 46/46 (dashboard/config) y 17/17 (IA).
+- [ ] **Recuperar las 73 exactas del VPS** cuando esté accesible (el disco puede seguir vivo; ver
+      “FAQs: backup local vs. 73 de producción”). Mientras tanto, el set local cubre los temas oficiales.
+- [ ] Limpiar 6 filas legacy de FAQs con pregunta distinta (mismo tema, prioridad baja) cuando se
+      reemplace el set local por el dump de producción.
+- [ ] **Commit pendiente** (fix VIP + delay configurable + proxy nginx + tooling local `dev-*.sh` +
+      fix FAQs/matcher + V10 + lunes festivos/V11 + VIP único por día/V12; ver `git status`)
 - [ ] `GROQ_API_KEY` en local si la demo se hace sin VPS (si no, la IA contesta el fallback genérico)
-- [ ] Cargar las 73 FAQs de producción en local (la BD local tiene 7)
 - [ ] Tie-break de FAQs con score empatado ("descuento" vs "cumpleaños")
 - [ ] Tests for REST controllers (`ReservationController`, `ReservationConfigController`) and `MessageProcessingService`
 - [ ] Frontend test setup (karma/jasmine) + specs for `reservations.component.ts`

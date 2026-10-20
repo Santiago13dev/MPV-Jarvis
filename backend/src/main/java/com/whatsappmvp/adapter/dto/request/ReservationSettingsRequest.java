@@ -14,6 +14,7 @@ public class ReservationSettingsRequest {
     private BigDecimal vipPrice;
     private Integer vipCapacity;
     private Set<DayOfWeek> operatingDays;
+    private Boolean openOnHolidayMondays;
     private LocalTime reservationStartTime;
     private LocalTime reservationEndTime;
     private Integer slotIntervalMinutes;

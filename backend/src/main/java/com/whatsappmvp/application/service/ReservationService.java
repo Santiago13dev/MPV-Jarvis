@@ -56,8 +56,9 @@ import java.util.UUID;
  *
  * Concurrencia: cada operación que consume cupo toma un lock transaccional de PostgreSQL
  * (pg_advisory_xact_lock) por franja (fecha + hora), y DENTRO de ese lock verifica disponibilidad e inserta.
- * Así "verificar + crear" es atómico entre clientes concurrentes. Respaldos adicionales en BD:
- * índice único parcial para VIP e índice único de idempotency_key.
+ * El VIP, al ser un único espacio físico, además toma un lock por día. Así "verificar + crear" es atómico
+ * entre clientes concurrentes. Respaldos adicionales en BD: índice único parcial VIP por día e índice
+ * único de idempotency_key.
  * Los locks de varias franjas (modificaciones) se toman en orden determinista para evitar deadlocks.
  */
 @Slf4j
@@ -66,6 +67,8 @@ import java.util.UUID;
 public class ReservationService {
 
     private static final int SLOT_LOCK_NAMESPACE = 7001;
+    /** Lock por día para el VIP: un solo espacio físico, aunque se pida en franjas distintas. */
+    private static final int VIP_LOCK_NAMESPACE = 7002;
 
     private final ReservationJpaRepository reservationRepository;
     private final ReservationReceiptJpaRepository receiptRepository;
@@ -88,7 +91,7 @@ public class ReservationService {
 
     /** null = sin cambio. {@code requiredOwnerPhone} != null → solo el dueño puede modificar. */
     public record ModifyCommand(LocalDate date, LocalTime time, Integer partySize, ReservationType type,
-                                String requiredOwnerPhone, Actor actor) {}
+                                String customerName, String notes, String requiredOwnerPhone, Actor actor) {}
 
     /**
      * Resultado de crear/modificar. Si {@code check.available()} es false NO se hizo ningún cambio y
@@ -148,6 +151,7 @@ public class ReservationService {
             }
         }
 
+        if (type == ReservationType.VIP) lockVipDates(List.of(c.date()));
         lockSlots(List.of(slotKey(c.date(), c.time())));
 
         // Idempotencia (2/2): tras tomar el lock, otra transacción concurrente con la misma llave ya pudo commitear
@@ -243,11 +247,24 @@ public class ReservationService {
         LocalDate newDate = m.date() != null ? m.date() : r.getSlotDate();
         LocalTime newTime = m.time() != null ? m.time() : r.getSlotTime();
         int newParty = m.partySize() != null ? m.partySize() : Objects.requireNonNullElse(r.getPartySize(), 1);
+        String newName = m.customerName() != null ? m.customerName().trim() : r.getCustomerName();
+        if (newName == null || newName.isBlank()) {
+            throw new BusinessException("El nombre del cliente no puede quedar vacío");
+        }
+        // notes: null = sin cambio; cadena vacía = borrar la nota
+        String newNotes = m.notes() != null
+                ? (m.notes().isBlank() ? null : m.notes().trim())
+                : r.getNotes();
 
         boolean same = newType == r.getReservationType() && newDate.equals(r.getSlotDate())
-                && newTime.equals(r.getSlotTime()) && newParty == Objects.requireNonNullElse(r.getPartySize(), 1);
+                && newTime.equals(r.getSlotTime()) && newParty == Objects.requireNonNullElse(r.getPartySize(), 1)
+                && Objects.equals(newName, r.getCustomerName()) && Objects.equals(newNotes, r.getNotes());
         if (same) return Outcome.unchanged(r);
 
+        List<LocalDate> vipDates = new ArrayList<>();
+        if (r.getReservationType() == ReservationType.VIP) vipDates.add(r.getSlotDate());
+        if (newType == ReservationType.VIP) vipDates.add(newDate);
+        if (!vipDates.isEmpty()) lockVipDates(vipDates);
         lockSlots(List.of(slotKey(r.getSlotDate(), r.getSlotTime()), slotKey(newDate, newTime)));
 
         // La propia reserva se excluye: sus cupos actuales quedan libres para el cambio
@@ -264,6 +281,8 @@ public class ReservationService {
         r.setSlotDate(newDate);
         r.setSlotTime(newTime);
         r.setPartySize(newParty);
+        r.setCustomerName(newName);
+        r.setNotes(newNotes);
         r.setUnitPrice(check.price().unitPrice());
         r.setTotalPrice(check.price().totalPrice());
         BigDecimal delta = r.getTotalPrice().subtract(oldTotal);
@@ -536,6 +555,13 @@ public class ReservationService {
         }
     }
 
+    /** Serializa la creación/modificación de VIP por día (el espacio es único). */
+    private void lockVipDates(Collection<LocalDate> dates) {
+        for (LocalDate date : new TreeSet<>(dates)) {
+            reservationRepository.lockSlot(VIP_LOCK_NAMESPACE, (int) date.toEpochDay());
+        }
+    }
+
     private void requireOwner(ReservationEntity r, String requiredOwnerPhone) {
         if (requiredOwnerPhone != null && !requiredOwnerPhone.equals(r.getPhoneNumber())) {
             log.warn("[RESERVATION] ownership violation reservationId={} requester={}", r.getId(), mask(requiredOwnerPhone));
@@ -549,6 +575,8 @@ public class ReservationService {
         m.put("date", r.getSlotDate());
         m.put("time", r.getSlotTime());
         m.put("partySize", r.getPartySize());
+        m.put("customerName", r.getCustomerName());
+        m.put("notes", r.getNotes());
         m.put("totalPrice", r.getTotalPrice());
         return m;
     }

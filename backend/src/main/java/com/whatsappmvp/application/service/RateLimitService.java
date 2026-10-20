@@ -32,9 +32,8 @@ public class RateLimitService {
     // ── OUTBOUND (respuestas del bot) ───────────────────────────────────────
     // Máximo 3 envíos concurrentes a WhatsApp API
     private final Semaphore outboundSemaphore = new Semaphore(3);
-    // Delay mínimo entre mensajes al mismo usuario (evita flooding)
+    // Último envío por usuario (delay anti-flood configurable: 5s prod, 200ms local)
     private final Map<String, Instant> lastSendTime = new ConcurrentHashMap<>();
-    private static final Duration MIN_DELAY_BETWEEN_SENDS = Duration.ofSeconds(5);
 
     /**
      * Verifica si el teléfono está dentro del límite de mensajes.
@@ -80,7 +79,7 @@ public class RateLimitService {
         // 2. Esperar delay mínimo por usuario
         Instant lastSend = lastSendTime.get(phone);
         if (lastSend != null) {
-            long waitMs = MIN_DELAY_BETWEEN_SENDS.toMillis() - Duration.between(lastSend, Instant.now()).toMillis();
+            long waitMs = appProperties.getOutbound().getMinDelayMs() - Duration.between(lastSend, Instant.now()).toMillis();
             if (waitMs > 0) {
                 log.debug("[RateLimit] Per-user delay: waiting {}ms for phone {}", waitMs, phone);
                 Thread.sleep(waitMs);

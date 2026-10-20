@@ -2,6 +2,7 @@ package com.whatsappmvp.integration;
 
 import com.whatsappmvp.application.reservation.Actor;
 import com.whatsappmvp.application.reservation.AvailabilityModels.Reason;
+import com.whatsappmvp.application.reservation.ColombianHolidays;
 import com.whatsappmvp.application.reservation.ReservationAvailabilityService;
 import com.whatsappmvp.application.service.ReservationService;
 import com.whatsappmvp.application.service.ReservationService.CreateCommand;
@@ -90,6 +91,18 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
         return availability.getAvailability(date, time).normal().reserved();
     }
 
+    private LocalDate nextHolidayMonday() {
+        return ColombianHolidays.nextHolidayMonday(LocalDate.now(BOGOTA).plusDays(1));
+    }
+
+    private LocalDate nextNormalMonday() {
+        LocalDate d = LocalDate.now(BOGOTA).plusDays(1);
+        while (d.getDayOfWeek() != DayOfWeek.MONDAY || ColombianHolidays.isHoliday(d)) {
+            d = d.plusDays(1);
+        }
+        return d;
+    }
+
     // ── Precio ────────────────────────────────────────────────────────────
 
     @Test
@@ -97,7 +110,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
         Outcome o = create(ReservationType.NORMAL, saturday, T1200, 5);
         assertThat(o.ok()).isTrue();
         assertThat(o.reservation().getUnitPrice()).isEqualByComparingTo("40000");
-        assertThat(o.reservation().getTotalPrice()).isEqualByComparingTo("200000");
+        assertThat(o.reservation().getTotalPrice()).isEqualByComparingTo("40000");
         assertThat(o.reservation().getStatus()).isEqualTo(ReservationStatus.PAYMENT_PENDING);
         assertThat(o.reservation().getReservationNumber()).isNotNull();
         assertThat(o.reservation().getHoldExpiresAt()).isNotNull();
@@ -142,16 +155,30 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void closedDaysAreRejectedAndTheNextOpenDaysAreOffered() {
-        LocalDate monday = saturday.plusDays(2);
+        LocalDate monday = nextNormalMonday();
         Outcome o = create(ReservationType.NORMAL, monday, T1200, 4);
         assertThat(o.ok()).isFalse();
         assertThat(o.check().reason()).isEqualTo(Reason.CLOSED_DAY);
         assertThat(o.check().nextOperatingDays()).isNotEmpty();
         assertThat(o.check().nextOperatingDays()).allMatch(d ->
-                d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY);
+                d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY
+                        || (d.getDayOfWeek() == DayOfWeek.MONDAY && ColombianHolidays.isHoliday(d)));
 
         assertThat(create(ReservationType.NORMAL, saturday.minusDays(1), T1200, 4).check().reason())
                 .isEqualTo(Reason.CLOSED_DAY); // viernes
+    }
+
+    @Test
+    void holidayMondaysAreOpen_andOrdinaryMondaysAreNot() {
+        LocalDate holiday = nextHolidayMonday();
+        Outcome o = create(ReservationType.NORMAL, holiday, T1200, 4);
+        assertThat(o.ok()).isTrue();
+        assertThat(o.reservation().getSlotDate()).isEqualTo(holiday);
+
+        LocalDate ordinary = nextNormalMonday();
+        Outcome n = create(ReservationType.NORMAL, ordinary, T1200, 4);
+        assertThat(n.ok()).isFalse();
+        assertThat(n.check().reason()).isEqualTo(Reason.CLOSED_DAY);
     }
 
     @Test
@@ -166,18 +193,20 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
     // ── VIP ───────────────────────────────────────────────────────────────
 
     @Test
-    void vipIsFlatPriced_exclusivePerSlot_andDoesNotConsumeNormalCapacity() {
+    void vipIsFlatPriced_onePerDay_andDoesNotConsumeNormalCapacity() {
         Outcome vip = create(ReservationType.VIP, saturday, T1230, 15);
         assertThat(vip.ok()).isTrue();
         assertThat(vip.reservation().getTotalPrice()).isEqualByComparingTo("100000"); // no 15 × 100.000
 
-        Outcome second = create(ReservationType.VIP, saturday, T1230, 5);
+        // El VIP es un solo espacio físico: otra franja del mismo día tampoco está libre.
+        Outcome second = create(ReservationType.VIP, saturday, T1300, 5);
         assertThat(second.ok()).isFalse();
         assertThat(second.check().reason()).isEqualTo(Reason.VIP_TAKEN);
-        assertThat(second.check().alternatives()).isNotEmpty();
+        assertThat(second.check().alternatives()).isEmpty();
+        assertThat(availability.findAvailableSlots(saturday, ReservationType.VIP, 5, null)).isEmpty();
 
-        // Otra franja sí está libre
-        assertThat(create(ReservationType.VIP, saturday, T1300, 5).ok()).isTrue();
+        // Otro día sí está libre
+        assertThat(create(ReservationType.VIP, sunday, T1300, 5).ok()).isTrue();
 
         // El VIP no gasta cupos de la zona normal
         assertThat(create(ReservationType.NORMAL, saturday, T1230, 40).ok()).isTrue();
@@ -207,14 +236,16 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
     }
 
     @Test
-    void concurrentVipAttemptsForTheSameSlotProduceExactlyOneReservation() throws Exception {
+    void concurrentVipAttemptsAcrossDifferentSlotsProduceExactlyOneReservation() throws Exception {
+        LocalTime[] times = {T1130, T1200, T1230, T1300};
         List<Outcome> results = runConcurrently(8, n ->
-                create(ReservationType.VIP, saturday, T1300, 10, "vip-" + saturday + "-" + n));
+                create(ReservationType.VIP, saturday, times[n % times.length], 10, "vip-" + saturday + "-" + n));
 
         assertThat(results.stream().filter(Outcome::ok).count()).isEqualTo(1);
         assertThat(results.stream().filter(o -> !o.ok())
                 .allMatch(o -> o.check().reason() == Reason.VIP_TAKEN)).isTrue();
         assertThat(availability.getAvailability(saturday, T1300).vip().available()).isZero();
+        assertThat(availability.findAvailableSlots(saturday, ReservationType.VIP, 10, null)).isEmpty();
     }
 
     // ── Idempotencia ──────────────────────────────────────────────────────
@@ -280,19 +311,19 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
     // ── Modificar ─────────────────────────────────────────────────────────
 
     @Test
-    void modifyingMovesTheSlotRecalculatesThePriceAndFreesTheOldSlot() {
+    void modifyingMovesTheSlotKeepsTheFixedPriceAndFreesTheOldSlot() {
         Outcome o = create(ReservationType.NORMAL, saturday, T1130, 4);
         ReservationEntity r = o.reservation();
-        assertThat(r.getTotalPrice()).isEqualByComparingTo("160000");
+        assertThat(r.getTotalPrice()).isEqualByComparingTo("40000");
 
-        Outcome moved = service.modify(r.getId(), new ModifyCommand(sunday, T1200, 6, null,
+        Outcome moved = service.modify(r.getId(), new ModifyCommand(sunday, T1200, 6, null, null, null,
                 r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
 
         assertThat(moved.ok()).isTrue();
         assertThat(moved.reservation().getSlotDate()).isEqualTo(sunday);
         assertThat(moved.reservation().getSlotTime()).isEqualTo(T1200);
-        assertThat(moved.reservation().getTotalPrice()).isEqualByComparingTo("240000");
-        assertThat(moved.priceDelta()).isEqualByComparingTo("80000");
+        assertThat(moved.reservation().getTotalPrice()).isEqualByComparingTo("40000");
+        assertThat(moved.priceDelta()).isEqualByComparingTo("0");
         assertThat(reservedNormal(saturday, T1130)).isZero();
         assertThat(reservedNormal(sunday, T1200)).isEqualTo(6);
     }
@@ -303,7 +334,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
         create(ReservationType.NORMAL, sunday, T1300, 25);
         ReservationEntity r = create(ReservationType.NORMAL, saturday, T1130, 4).reservation();
 
-        Outcome o = service.modify(r.getId(), new ModifyCommand(sunday, T1300, null, null,
+        Outcome o = service.modify(r.getId(), new ModifyCommand(sunday, T1300, null, null, null, null,
                 r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
 
         assertThat(o.ok()).isFalse();
@@ -317,7 +348,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
     @Test
     void modifyingToTheSameValuesChangesNothing() {
         ReservationEntity r = create(ReservationType.NORMAL, saturday, T1200, 4).reservation();
-        Outcome o = service.modify(r.getId(), new ModifyCommand(saturday, T1200, 4, null,
+        Outcome o = service.modify(r.getId(), new ModifyCommand(saturday, T1200, 4, null, null, null,
                 r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
         assertThat(o.unchanged()).isTrue();
     }

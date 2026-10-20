@@ -230,7 +230,8 @@ public class MessageProcessingService {
                 conversation.setPendingAction(null);
                 conversation.setPendingActionData(null);
                 conversationRepository.save(conversation);
-                humanTransferService.transferToHuman(conversation, remoteJid, "AI_OFFER_ACCEPTED", content);
+                String transferMsg = humanTransferService.transferToHuman(conversation, "AI_OFFER_ACCEPTED", content);
+                sendAndPersistResponse(conversation, remoteJid, transferMsg, ProcessedBy.SYSTEM, 0, pendingSends);
                 return;
             } else if (isReject) {
                 log.info("[Pipeline] User rejected human transfer offer → clearing pending action");
@@ -274,10 +275,8 @@ public class MessageProcessingService {
         if (humanTransferService.hasTransferKeyword(normalizedContent)) {
             log.info("[Pipeline] HUMAN TRANSFER keyword detected → transferring to human");
             reservationConversation.discardDraft(conversation);
-            humanTransferService.transferToHuman(conversation, remoteJid, "KEYWORD", content);
-            sendAndPersistResponse(conversation, remoteJid,
-                "Un asesor se comunicará contigo pronto. ¡Gracias por tu paciencia! 😊",
-                ProcessedBy.SYSTEM, 0, pendingSends);
+            String transferMsg = humanTransferService.transferToHuman(conversation, "KEYWORD", content);
+            sendAndPersistResponse(conversation, remoteJid, transferMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -392,7 +391,8 @@ public class MessageProcessingService {
         // ── PASO 8.5: Timeout — transferir a humano si pasó demasiado tiempo ──
         if (!isFirstMessage && humanTransferService.isTimeoutTriggered(conversation)) {
             log.info("[Pipeline] Timeout triggered → transferring to human");
-            humanTransferService.transferToHuman(conversation, remoteJid, "TIMEOUT", content);
+            String transferMsg = humanTransferService.transferToHuman(conversation, "TIMEOUT", content);
+            sendAndPersistResponse(conversation, remoteJid, transferMsg, ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -426,7 +426,8 @@ public class MessageProcessingService {
                 List<Map<String, String>> history = new ArrayList<>();
                 if (humanTransferService.isFrustrated(content, history)) {
                     log.info("[Pipeline] AI detected frustration → transferring to human");
-                    humanTransferService.transferToHuman(conversation, remoteJid, "FRUSTRATION", content);
+                    String transferMsg = humanTransferService.transferToHuman(conversation, "FRUSTRATION", content);
+                    sendAndPersistResponse(conversation, remoteJid, transferMsg, ProcessedBy.SYSTEM, 0, pendingSends);
                 }
             } catch (Exception e) {
                 log.error("[Pipeline] AI call failed: {}", e.getMessage());

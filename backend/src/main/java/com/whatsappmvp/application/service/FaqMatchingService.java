@@ -112,8 +112,11 @@ public class FaqMatchingService {
                     || (singular != null && matchesWholeWord(normalizedMessage, singular))) {
                 score += 3;
             }
-            // Misma raíz con distinta terminación ("reserva" vs "¿cómo reservo?") — peso medio
-            else if (normalizedKeyword.length() >= 5
+            // Misma raíz con distinta terminación ("reserva" vs "¿cómo reservo?") — peso medio.
+            // Solo para keywords de UNA palabra: en frases como "parqueadero para motos" el prefijo
+            // "parqu" hacía match con cualquier mensaje que dijera "parqueadero" (FAQ de motos > general).
+            else if (!normalizedKeyword.contains(" ")
+                    && normalizedKeyword.length() >= 5
                     && containsWordWithPrefix(normalizedMessage, normalizedKeyword.substring(0, 5))) {
                 score += 2;
             }

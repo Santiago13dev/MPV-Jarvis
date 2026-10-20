@@ -39,7 +39,7 @@ public class HumanTransferService {
     // "hablar con una persona" y "hablar con un humano".
     private static final List<String> TRANSFER_KEYWORDS = List.of(
             "hablar con alguien", "hablar con una persona", "hablar con un humano",
-            "quiero un asesor", "necesito un asesor", "puedo hablar con un asesor",
+            "hablar con un asesor", "quiero un asesor", "necesito un asesor", "puedo hablar con un asesor",
             "dueño", "encargado", "gerente",
             "queja", "reclamo", "problema grave", "esto es una basura",
             "quiero mi dinero", "reembolso", "estaf", "estafa",
@@ -127,8 +127,13 @@ public class HumanTransferService {
      * 3. Responde al cliente confirmando
      */
     @Transactional
-    public void transferToHuman(ConversationEntity conversation, String remoteJid,
-                                String reason, String lastMessage) {
+    /**
+     * Cambia la conversación a HUMAN_TAKEOVER y notifica al dueño.
+     *
+     * @return el mensaje que debe enviarse al cliente. El llamador lo envía y persiste
+     *         (así queda en el historial del dashboard; antes se enviaba directo y no se guardaba).
+     */
+    public String transferToHuman(ConversationEntity conversation, String reason, String lastMessage) {
         log.info("[HumanTransfer] Transferring conversation {} to human. Reason: {}",
                 conversation.getId(), reason);
 
@@ -139,24 +144,14 @@ public class HumanTransferService {
         // 2. Notificar al dueño vía WhatsApp
         notifyOwner(conversation, reason, lastMessage);
 
-        // 3. Responder al cliente
-        String clientMsg = switch (reason) {
+        // 3. Mensaje para el cliente (lo envía y persiste MessageProcessingService)
+        return switch (reason) {
             case "KEYWORD" -> "Claro, te comunico con un asesor ahora mismo. Un momento por favor. 🙋";
             case "FRUSTRATION" -> "Veo que estás molesto/a. Voy a conectarte con un asesor que te pueda ayudar mejor. Un momento. 🙋";
             case "TIMEOUT" -> "Parece que necesitas más ayuda. Te comunico con un asesor humano. Un momento. 🙋";
             case "AI_OFFER_ACCEPTED" -> "¡Claro! Te comunico con un asesor ahora mismo. Un momento por favor. 🙋";
             default -> "Un asesor te atenderá muy pronto. Un momento por favor. 🙋";
         };
-
-        String targetJid = remoteJid != null && !remoteJid.isBlank()
-                ? remoteJid
-                : conversation.getContact().getPhone() + "@s.whatsapp.net";
-
-        try {
-            whatsAppClient.sendText(targetJid, clientMsg);
-        } catch (Exception e) {
-            log.error("[HumanTransfer] Failed to notify client: {}", e.getMessage());
-        }
     }
 
     /**

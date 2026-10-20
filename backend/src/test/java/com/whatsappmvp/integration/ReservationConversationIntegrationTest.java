@@ -79,7 +79,7 @@ class ReservationConversationIntegrationTest extends PostgresTestBase {
 
         // 4) Da el nombre: resumen con el precio calculado por el backend, todavía SIN reserva
         Result r4 = say(conv, phone, "Kevin Perez", "wa-4");
-        assertThat(r4.text()).contains("12:00 PM").contains("5 personas").contains("$200.000").contains("¿Deseas continuar?");
+        assertThat(r4.text()).contains("12:00 PM").contains("5 personas").contains("$40.000").contains("¿Deseas continuar?");
         assertThat(reservations.findUpcomingByPhone(phone, ReservationStatus.ACTIVE, LocalDate.now())).isEmpty();
 
         // 5) Confirma: ahora sí existe en PostgreSQL y el mensaje trae el número de reserva
@@ -94,7 +94,7 @@ class ReservationConversationIntegrationTest extends PostgresTestBase {
         assertThat(r.getPartySize()).isEqualTo(5);
         assertThat(r.getSlotDate()).isEqualTo(saturday);
         assertThat(r.getCustomerName()).isEqualTo("Kevin Perez");
-        assertThat(r.getTotalPrice()).isEqualByComparingTo("200000");
+        assertThat(r.getTotalPrice()).isEqualByComparingTo("40000");
         assertThat(r5.text()).contains("#" + r.getReservationNumber());
     }
 

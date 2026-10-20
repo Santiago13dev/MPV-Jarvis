@@ -17,6 +17,8 @@ interface ReceiptView {
 
 interface EditForm {
   r: Reservation;
+  customerName: string;
+  notes: string;
   date: string;
   time: string;
   partySize: number;
@@ -194,9 +196,9 @@ interface CreateForm {
       <div class="card" *ngIf="cfg as c">
         <h3>Reglas de reserva</h3>
         <div class="grid">
-          <label>Precio por persona (normal)<input type="number" min="0" [(ngModel)]="c.normalPrice"></label>
+          <label>Precio reserva normal (fijo)<input type="number" min="0" [(ngModel)]="c.normalPrice"></label>
           <label>Precio VIP (espacio completo)<input type="number" min="0" [(ngModel)]="c.vipPrice"></label>
-          <label>Capacidad VIP (personas)<input type="number" min="1" [(ngModel)]="c.vipCapacity"></label>
+          <label>Capacidad máx. VIP (personas · 1 espacio por día)<input type="number" min="1" [(ngModel)]="c.vipCapacity"></label>
           <label>Capacidad por franja (por defecto)<input type="number" min="1" [(ngModel)]="c.defaultSlotCapacity"></label>
           <label>Máx. personas por reserva<input type="number" min="1" [(ngModel)]="c.maxPartySize"></label>
           <label>Inicio de reservas<input type="time" [(ngModel)]="c.reservationStartTime"></label>
@@ -210,6 +212,10 @@ interface CreateForm {
             <input type="checkbox" [checked]="c.operatingDays.includes(d.key)" (change)="toggleDay(c, d.key)"> {{ d.label }}
           </label>
         </div>
+        <label class="check">
+          <input type="checkbox" [(ngModel)]="c.openOnHolidayMondays">
+          Abrir también lunes festivos (calendario Colombia)
+        </label>
         <label class="check"><input type="checkbox" [(ngModel)]="c.vipConsumesNormalCapacity"> La reserva VIP descuenta cupos de las reservas normales</label>
         <label class="block">Instrucciones de pago (se envían al cliente)
           <textarea rows="4" [(ngModel)]="c.paymentInstructions"></textarea>
@@ -276,12 +282,14 @@ interface CreateForm {
         <h3>Modificar reserva #{{ e.r.reservationNumber }}</h3>
         <p class="sub">{{ e.r.customerName }} · actualmente {{ fmtDate(e.r.date) }} {{ fmtTime(e.r.time) }} · {{ e.r.partySize }} personas</p>
         <div class="grid">
+          <label>Cliente<input type="text" [(ngModel)]="e.customerName"></label>
           <label>Fecha<input type="date" [(ngModel)]="e.date"></label>
           <label>Hora<input type="time" [(ngModel)]="e.time"></label>
           <label>Personas<input type="number" min="1" [(ngModel)]="e.partySize"></label>
           <label>Tipo
             <select [(ngModel)]="e.type"><option value="NORMAL">Normal</option><option value="VIP">VIP</option></select>
           </label>
+          <label>Notas<textarea rows="2" [(ngModel)]="e.notes"></textarea></label>
         </div>
         <button class="btn btn-sm btn-secondary" (click)="loadSlots('edit')">🔍 Ver horarios disponibles</button>
         <div class="chips" *ngIf="e.slots.length > 0">
@@ -629,7 +637,8 @@ export class ReservationsComponent implements OnInit, OnDestroy {
 
   openEdit(r: Reservation): void {
     this.edit = {
-      r, date: r.date, time: this.hhmm(r.time), partySize: r.partySize,
+      r, customerName: r.customerName, notes: r.notes ?? '', date: r.date,
+      time: this.hhmm(r.time), partySize: r.partySize,
       type: r.reservationType, slots: [], busy: false
     };
   }
@@ -639,7 +648,17 @@ export class ReservationsComponent implements OnInit, OnDestroy {
   }
 
   submitEdit(e: EditForm): void {
-    const patch: { date?: string; time?: string; partySize?: number; reservationType?: ReservationType } = {};
+    const name = (e.customerName || '').trim();
+    if (!name) {
+      this.error('El nombre del cliente no puede quedar vacío.');
+      return;
+    }
+    const patch: {
+      customerName?: string; notes?: string; date?: string; time?: string;
+      partySize?: number; reservationType?: ReservationType;
+    } = {};
+    if (name !== e.r.customerName) patch.customerName = name;
+    if ((e.notes || '').trim() !== (e.r.notes ?? '').trim()) patch.notes = (e.notes || '').trim();
     if (e.date && e.date !== e.r.date) patch.date = e.date;
     if (e.time && this.hhmm(e.time) !== this.hhmm(e.r.time)) patch.time = this.hhmm(e.time);
     if (Number(e.partySize) !== e.r.partySize) patch.partySize = Number(e.partySize);

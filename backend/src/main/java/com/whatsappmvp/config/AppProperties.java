@@ -67,5 +67,7 @@ public class AppProperties {
     public static class Outbound {
         private long delayMinMs = 5000;
         private long delayMaxMs = 10000;
+        /** Espera mínima entre mensajes al mismo usuario (anti-flood). Local: 200ms. */
+        private long minDelayMs = 5000;
     }
 }

@@ -41,8 +41,8 @@ public class ReservationConfigController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> update(@RequestBody ReservationSettingsRequest r) {
         RestaurantSettingsEntity s = settingsService.update(new SettingsUpdate(
                 r.getNormalPrice(), r.getVipPrice(), r.getVipCapacity(), r.getOperatingDays(),
-                r.getReservationStartTime(), r.getReservationEndTime(), r.getSlotIntervalMinutes(),
-                r.getDefaultSlotCapacity(), r.getMaxPartySize(), r.getHoldMinutes(),
+                r.getOpenOnHolidayMondays(), r.getReservationStartTime(), r.getReservationEndTime(),
+                r.getSlotIntervalMinutes(), r.getDefaultSlotCapacity(), r.getMaxPartySize(), r.getHoldMinutes(),
                 r.getVipConsumesNormalCapacity(), r.getPaymentInstructions()));
         return ResponseEntity.ok(ApiResponse.ok("Configuración actualizada", toMap(s)));
     }
@@ -105,6 +105,7 @@ public class ReservationConfigController {
         m.put("vipPrice", s.getVipPrice());
         m.put("vipCapacity", s.getVipCapacity());
         m.put("operatingDays", s.operatingDaysSet().stream().sorted().map(DayOfWeek::name).toList());
+        m.put("openOnHolidayMondays", s.getOpenOnHolidayMondays());
         m.put("reservationStartTime", s.getReservationStartTime());
         m.put("reservationEndTime", s.getReservationEndTime());
         m.put("slotIntervalMinutes", s.getSlotIntervalMinutes());

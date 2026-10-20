@@ -19,4 +19,10 @@ public class ReservationUpdateRequest {
     private Integer partySize;
 
     private ReservationType reservationType;
+
+    /** null = sin cambio; si viene, no puede quedar vacío. */
+    private String customerName;
+
+    /** null = sin cambio; cadena vacía = borrar la nota. */
+    private String notes;
 }

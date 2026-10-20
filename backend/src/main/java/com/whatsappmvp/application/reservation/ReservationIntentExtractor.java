@@ -93,7 +93,9 @@ public class ReservationIntentExtractor {
     private static final Pattern BARE_NUMBER = Pattern.compile("^#?(\\d{3,7})$");
 
     private static final Pattern NAME_PATTERN = Pattern.compile(
-            "(?iu)(?:a nombre de|mi nombre es|me llamo|nombre\\s*:?)\\s+(\\p{L}+(?:\\s+\\p{L}+){0,3})");
+            "(?iu)(?:a nombre de|mi nombre es|me llamo"
+                    + "|nombre\\s+(?:de\\s+la\\s+reserva\\s+)?a\\s+"
+                    + "|nombre\\s*:?\\s*)\\s*(\\p{L}+(?:\\s+\\p{L}+){0,3})");
     private static final Pattern PHONE_PATTERN = Pattern.compile("\\+?\\d[\\d\\s-]{8,14}\\d");
     private static final Pattern TAIL = Pattern.compile(
             "\\b(?:del|desde el|de el)\\b.*\\b(?:al|para el|hacia el)\\b(.*)$");

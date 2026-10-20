@@ -240,6 +240,8 @@ export interface ReservationRequest {
 
 /** null/undefined = sin cambio. */
 export interface ReservationUpdate {
+  customerName?: string;
+  notes?: string;
   date?: string;
   time?: string;
   partySize?: number;
@@ -295,6 +297,7 @@ export interface ReservationSettings {
   vipPrice: number;
   vipCapacity: number;
   operatingDays: string[];            // 'SATURDAY', 'SUNDAY'...
+  openOnHolidayMondays: boolean;      // abrir lunes festivos (calendario Colombia)
   reservationStartTime: string;       // HH:mm:ss
   reservationEndTime: string;
   slotIntervalMinutes: number;

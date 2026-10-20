@@ -81,7 +81,12 @@ public class DateExpressionResolver {
         scan(text, PASADO_MANANA, m -> today.plusDays(2), found);
         scan(text, MANANA, m -> today.plusDays(1), found);
         scan(text, HOY, m -> today, found);
-        scan(text, WEEKDAY, m -> weekday(m, today), found);
+
+        // Si ya hay una fecha explícita ("lunes 2 de noviembre"), esa fecha manda. Antes se sumaba
+        // también el día de la semana y el bot respondía "me mencionaste varias fechas".
+        if (found.isEmpty()) {
+            scan(text, WEEKDAY, m -> weekday(m, today), found);
+        }
 
         if (found.isEmpty()) {
             Matcher dm = DAY_OF_MONTH.matcher(text);

@@ -29,8 +29,11 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -124,6 +127,12 @@ public class ReservationConversationService {
                 mask(phone), x.intent(), ctx.awaiting(), draft != null ? draft.getMode() : "none");
 
         try {
+            // "llevar 2 más", "agregar 2 personas", "quitar 2": modificación incremental.
+            // Sin esto caía a la IA, que contestaba "puedes agregar..." pero no cambiaba nada.
+            if (draft == null) {
+                Result increment = tryIncrement(conv, phone, text, x, s);
+                if (increment != null) return increment;
+            }
             return draft == null
                     ? start(conv, phone, text, x, waMessageId, s, pivot)
                     : proceed(draft, conv, phone, x, waMessageId, s);
@@ -202,13 +211,28 @@ public class ReservationConversationService {
             case GET_RESERVATION -> showReservations(phone, x);
             case PAYMENT_RECEIPT -> {
                 List<ReservationEntity> upcoming = reservationService.findUpcomingActiveByPhone(phone);
-                boolean awaitingPayment = upcoming.stream()
-                        .anyMatch(r -> r.getStatus() == ReservationStatus.PENDING
-                                || r.getStatus() == ReservationStatus.PAYMENT_PENDING);
-                // Sin reserva pendiente no se puede pedir comprobante: se contesta con lo que sí aplica
-                // (nunca "quedó confirmada": eso lo dice una FAQ y sería mentirle al cliente).
-                yield awaitingPayment ? Result.reply(msg.askReceiptImage())
-                        : Result.reply(!upcoming.isEmpty() ? msg.noPendingPayment() : msg.noReservations());
+                Optional<ReservationEntity> pending = upcoming.stream()
+                        .filter(r -> r.getStatus() == ReservationStatus.PENDING
+                                || r.getStatus() == ReservationStatus.PAYMENT_PENDING)
+                        .findFirst();
+                if (pending.isPresent()) {
+                    yield Result.reply(msg.askReceiptImage());
+                }
+                Optional<ReservationEntity> inReview = upcoming.stream()
+                        .filter(r -> r.getStatus() == ReservationStatus.PAYMENT_RECEIPT_SENT)
+                        .findFirst();
+                if (inReview.isPresent()) {
+                    yield Result.reply(msg.receiptInReview(inReview.get()));
+                }
+                Optional<ReservationEntity> confirmed = upcoming.stream()
+                        .filter(r -> r.getStatus() == ReservationStatus.CONFIRMED)
+                        .findFirst();
+                if (confirmed.isPresent()) {
+                    yield Result.reply(msg.alreadyConfirmed(confirmed.get()));
+                }
+                // Sin reserva pendiente ni confirmada: se contesta con lo que sí aplica
+                // (nunca "quedó confirmada": eso sería mentirle al cliente).
+                yield Result.reply(upcoming.isEmpty() ? msg.noReservations() : msg.noPendingPayment());
             }
             case GENERAL_QUESTION -> {
                 // "¿tienen VIP?" / "¿cómo es el espacio privado?" no debe caer a la IA genérica:
@@ -263,7 +287,7 @@ public class ReservationConversationService {
 
         return switch (d.getMode()) {
             case CREATE -> advanceCreate(d, x, conv, phone, waId, s);
-            case MODIFY -> continueModify(d, x, phone, s);
+            case MODIFY -> continueModify(d, x, conv, phone, s);
             case CANCEL -> continueCancel(d, x, phone);
         };
     }
@@ -386,6 +410,10 @@ public class ReservationConversationService {
             d.setSlotTime(x.time().time());
             changed = true;
         }
+        if (x.customerName() != null && !x.customerName().equals(d.getCustomerName())) {
+            d.setCustomerName(x.customerName());
+            changed = true;
+        }
         return changed;
     }
 
@@ -419,6 +447,9 @@ public class ReservationConversationService {
         }
         if (reason == Reason.PARTY_TOO_LARGE) {
             return handToHuman(d, conv, msg.reasonText(c));
+        }
+        if (reason == Reason.VIP_TAKEN) {
+            return handToHuman(d, conv, msg.vipTakenForDay(date));
         }
         if (reason == Reason.VIP_CAPACITY_EXCEEDED) {
             return ask(d, A_TYPE, msg.reasonText(c));
@@ -461,6 +492,9 @@ public class ReservationConversationService {
         }
         // El cupo se ocupó entre el resumen y la confirmación: se vuelve a ofrecer lo real
         RequestCheck c = o.check();
+        if (c.reason() == Reason.VIP_TAKEN) {
+            return handToHuman(d, conv, msg.vipTakenForDay(c.date()));
+        }
         d.setSlotTime(null);
         if (c.alternatives().isEmpty()) {
             d.setSlotDate(null);
@@ -489,6 +523,50 @@ public class ReservationConversationService {
     // MODIFICAR / CANCELAR
     // ══════════════════════════════════════════════════════════════════════
 
+    // "llevar/agregar/sumar 2 (personas) (más|adicionales)", "somos 2 más", "2 más", "quitar 2"
+    private static final Pattern INCREMENT = Pattern.compile(
+            "(?:llevar|agregar|sumar|a[ñn]adir)\\s+(\\d{1,2})(?:\\s+personas?)?(?:\\s+(?:m[áa]s|adicional(?:es)?))?"
+                    + "|(?:somos|vamos|ser[ií]amos)\\s+(\\d{1,2})\\s+personas?\\s+(?:m[áa]s|adicional(?:es)?)"
+                    + "|(\\d{1,2})(?:\\s+personas?)?\\s+(?:m[áa]s|adicional(?:es)?)"
+                    + "|(?:quitar|restar|eliminar|menos)\\s+(\\d{1,2})");
+
+    /**
+     * Modificación incremental de personas sobre una reserva activa. Devuelve null si el mensaje
+     * no es un incremento o si no hay reserva activa (en ese caso sigue el pipeline normal).
+     */
+    private Result tryIncrement(ConversationEntity conv, String phone, String text, Extraction x,
+                                RestaurantSettingsEntity s) {
+        String n = TextNormalizer.normalize(text);
+        // Una reserva nueva o una cancelación nunca son incrementos.
+        if (n.contains("reservar") || n.contains("nueva reserva") || n.contains("cancel")) return null;
+        Matcher m = INCREMENT.matcher(n);
+        if (!m.find()) return null;
+        List<ReservationEntity> list = reservationService.findUpcomingActiveByPhone(phone);
+        if (list.isEmpty()) return null;
+
+        int delta;
+        if (m.group(1) != null) delta = Integer.parseInt(m.group(1));
+        else if (m.group(2) != null) delta = Integer.parseInt(m.group(2));
+        else if (m.group(3) != null) delta = Integer.parseInt(m.group(3));
+        else delta = -Integer.parseInt(m.group(4));
+        if (delta == 0) return null;
+
+        ReservationEntity target = pickReservation(list, x);
+        if (target == null) {
+            return Result.reply("Tienes varias reservas activas. Dime el número (#) de la que quieres "
+                    + "modificar y cuántas personas agregar. 😊");
+        }
+        int current = target.getPartySize() != null ? target.getPartySize() : 1;
+        int next = current + delta;
+        if (next < 1) return Result.reply(msg.partyInvalid());
+        if (next > s.getMaxPartySize()) return Result.reply(msg.partyTooLarge(s.getMaxPartySize()));
+
+        ReservationDraftEntity d = newDraft(conv, Mode.MODIFY);
+        d.setTargetReservationId(target.getId());
+        d.setPartySize(next);
+        return evaluateModify(d, conv, target);
+    }
+
     private Result startManage(ConversationEntity conv, String phone, Extraction x, RestaurantSettingsEntity s,
                                boolean modify) {
         List<ReservationEntity> list = reservationService.findUpcomingActiveByPhone(phone);
@@ -504,10 +582,11 @@ public class ReservationConversationService {
             return ask(d, A_CONFIRM, msg.cancelPrompt(target));
         }
         applyModifyFields(d, x);
-        return evaluateModify(d, target);
+        return evaluateModify(d, conv, target);
     }
 
-    private Result continueModify(ReservationDraftEntity d, Extraction x, String phone, RestaurantSettingsEntity s) {
+    private Result continueModify(ReservationDraftEntity d, Extraction x, ConversationEntity conv,
+                                  String phone, RestaurantSettingsEntity s) {
         String prev = d.getAwaiting();
         if (x.discard() || (x.no() && A_CONFIRM.equals(prev))) return discardManage(d);
 
@@ -521,7 +600,7 @@ public class ReservationConversationService {
             if (t == null) return ask(d, A_RESERVATION, msg.whichReservation(list, "modificar"));
             d.setTargetReservationId(t.getId());
             applyModifyFields(d, x);
-            return evaluateModify(d, t);
+            return evaluateModify(d, conv, t);
         }
 
         ReservationEntity target = reservationService.getById(d.getTargetReservationId());
@@ -539,9 +618,9 @@ public class ReservationConversationService {
             changed = true;
         }
         if (A_CONFIRM.equals(prev) && x.yes() && !changed) {
-            return executeModify(d, phone);
+            return executeModify(d, conv, phone);
         }
-        return evaluateModify(d, target);
+        return evaluateModify(d, conv, target);
     }
 
     /** En MODIFY los campos del borrador son los NUEVOS valores (null = sin cambio). */
@@ -564,12 +643,17 @@ public class ReservationConversationService {
             d.setSlotTime(x.time().time());
             changed = true;
         }
+        if (x.customerName() != null && !x.customerName().equals(d.getCustomerName())) {
+            d.setCustomerName(x.customerName());
+            changed = true;
+        }
         return changed;
     }
 
-    private Result evaluateModify(ReservationDraftEntity d, ReservationEntity target) {
+    private Result evaluateModify(ReservationDraftEntity d, ConversationEntity conv, ReservationEntity target) {
         boolean anyChange = d.getSlotDate() != null || d.getSlotTime() != null
-                || d.getPartySize() != null || d.getReservationType() != null;
+                || d.getPartySize() != null || d.getReservationType() != null
+                || d.getCustomerName() != null;
         if (!anyChange) return ask(d, A_CHANGES, msg.askWhatToChange(target));
 
         LocalDate nd = d.getSlotDate() != null ? d.getSlotDate() : target.getSlotDate();
@@ -577,21 +661,27 @@ public class ReservationConversationService {
         int np = d.getPartySize() != null ? d.getPartySize()
                 : (target.getPartySize() != null ? target.getPartySize() : 1);
         ReservationType ntype = d.getReservationType() != null ? d.getReservationType() : target.getReservationType();
+        String nname = d.getCustomerName() != null ? d.getCustomerName() : target.getCustomerName();
 
         boolean same = nd.equals(target.getSlotDate()) && nt.equals(target.getSlotTime())
                 && ntype == target.getReservationType()
-                && np == (target.getPartySize() != null ? target.getPartySize() : 1);
+                && np == (target.getPartySize() != null ? target.getPartySize() : 1)
+                && Objects.equals(nname, target.getCustomerName());
         if (same) {
             d.setSlotDate(null);
             d.setSlotTime(null);
             d.setPartySize(null);
             d.setReservationType(null);
+            d.setCustomerName(null);
             return ask(d, A_CHANGES, "Eso ya es lo que tiene tu reserva. " + msg.askWhatToChange(target));
         }
 
         // La propia reserva se excluye: sus cupos actuales cuentan como libres para el cambio
         RequestCheck c = availability.check(nd, nt, ntype, np, target.getId());
         if (!c.available()) {
+            if (c.reason() == Reason.VIP_TAKEN) {
+                return handToHuman(d, conv, msg.vipTakenForDay(nd));
+            }
             boolean dateLevel = c.reason() == Reason.CLOSED_DAY || c.reason() == Reason.PAST_DATE
                     || (c.reason() == Reason.BLOCKED && calendar.isDateBlocked(nd));
             if (dateLevel) d.setSlotDate(null);
@@ -600,19 +690,22 @@ public class ReservationConversationService {
             return ask(d, A_CHANGES, msg.reasonText(c));
         }
         d.setOfferedTimes(null);
-        return ask(d, A_CONFIRM, msg.modifyPrompt(target, nd, nt, np, ntype, c.price()));
+        return ask(d, A_CONFIRM, msg.modifyPrompt(target, nd, nt, np, ntype, nname, c.price()));
     }
 
-    private Result executeModify(ReservationDraftEntity d, String phone) {
+    private Result executeModify(ReservationDraftEntity d, ConversationEntity conv, String phone) {
         Outcome o = reservationService.modify(d.getTargetReservationId(), new ModifyCommand(
                 d.getSlotDate(), d.getSlotTime(), d.getPartySize(), d.getReservationType(),
-                phone, Actor.customer(phone)));
+                d.getCustomerName(), null, phone, Actor.customer(phone)));
         if (o.unchanged()) {
             deleteDraft(d);
             return Result.reply("Tu reserva ya estaba con esos datos, no hice cambios.");
         }
         if (!o.ok()) {
             RequestCheck c = o.check();
+            if (c.reason() == Reason.VIP_TAKEN) {
+                return handToHuman(d, conv, msg.vipTakenForDay(c.date()));
+            }
             d.setSlotTime(null);
             d.setOfferedTimes(csv(c.alternatives()));
             return ask(d, A_CHANGES, msg.reasonText(c));

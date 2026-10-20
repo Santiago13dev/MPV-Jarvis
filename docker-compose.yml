@@ -75,6 +75,7 @@ services:
       ADMIN_PHONE: ${ADMIN_PHONE:-}
       OUTBOUND_DELAY_MIN_MS: ${OUTBOUND_DELAY_MIN_MS:-5000}
       OUTBOUND_DELAY_MAX_MS: ${OUTBOUND_DELAY_MAX_MS:-10000}
+      OUTBOUND_MIN_DELAY_MS: ${OUTBOUND_MIN_DELAY_MS:-5000}
     ports:
       - "8080:8080"   # Solo para dev
     volumes:

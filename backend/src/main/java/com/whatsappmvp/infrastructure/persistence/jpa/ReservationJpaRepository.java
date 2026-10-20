@@ -60,6 +60,15 @@ public interface ReservationJpaRepository
                            @Param("statuses") Collection<ReservationStatus> statuses,
                            @Param("excludeId") UUID excludeId);
 
+    /** Reservas activas de un tipo en todo el día (el VIP es un único espacio por día). */
+    @Query("SELECT COUNT(r) FROM ReservationEntity r " +
+           "WHERE r.slotDate = :date AND r.reservationType = :type " +
+           "AND r.status IN :statuses AND r.id <> :excludeId")
+    long countReservationsByDate(@Param("date") LocalDate date,
+                                 @Param("type") ReservationType type,
+                                 @Param("statuses") Collection<ReservationStatus> statuses,
+                                 @Param("excludeId") UUID excludeId);
+
     /** Personas por franja en un día (para el panel de disponibilidad). [slotTime, sum]. */
     @Query("SELECT r.slotTime, COALESCE(SUM(COALESCE(r.partySize, 1)), 0), COUNT(r) FROM ReservationEntity r " +
            "WHERE r.slotDate = :date AND r.reservationType = :type AND r.status IN :statuses " +

@@ -20,6 +20,10 @@ class FaqMatchingServiceTest {
     private static final String DOMICILIO = "No. Actualmente no contamos con servicio de domicilio.";
     private static final String HORARIO = "Nuestro horario de atención es: sábados y domingos.";
     private static final String MASCOTA = "¡Sí! Somos un restaurante pet friendly.";
+    private static final String PARQUEADERO = "Sí, contamos con parqueadero público para carros y motos.";
+    private static final String PARQUEADERO_MOTOS = "Sí, el parqueadero público también es para motos.";
+    private static final String POLITICA_CANCELACION =
+            "Si cancelas, no hay devolución en dinero; el valor queda para otra fecha.";
 
     private final FaqJpaRepository repository = org.mockito.Mockito.mock(FaqJpaRepository.class);
     private final FaqMatchingService service = new FaqMatchingService(repository);
@@ -34,7 +38,15 @@ class FaqMatchingServiceTest {
                 faq("¿Tienen servicio de domicilio?", DOMICILIO, "domicilio", "delivery", "envio"),
                 faq("¿Cuál es el horario de atención?", HORARIO, "horario", "hora", "abren", "dias"),
                 faq("¿Puedo llevar mi mascota?", MASCOTA, "perro", "mascota", "pet friendly"),
-                faq("¿Tienen WiFi?", "No contamos con servicio de WiFi.", "wifi", "red", "internet")));
+                faq("¿Tienen WiFi?", "No contamos con servicio de WiFi.", "wifi", "red", "internet"),
+                // Orden invertido a propósito: la FAQ de motos está antes que la general.
+                faq("¿Hay parqueadero para motos?", PARQUEADERO_MOTOS, "moto", "motos"),
+                faq("¿Tienen parqueadero?", PARQUEADERO, "parqueadero", "parking", "estacionamiento"),
+                // La FAQ de cancelar está antes y comparte la palabra "cancelar".
+                faq("¿Puedo cancelar mi reserva?", "Sí. Avísame con anticipación.",
+                        "cancelar mi reserva", "cancelar la reserva", "cancelacion de reserva", "cancelar"),
+                faq("¿Cuál es la política de cancelación?", POLITICA_CANCELACION,
+                        "politica de cancelacion", "cancelacion", "cancelar", "devolucion")));
     }
 
     @Test
@@ -66,5 +78,18 @@ class FaqMatchingServiceTest {
         assertThat(service.findMatch("reserva para 4 y voy con mi perro",
                 f -> f.getQuestion().toLowerCase().contains("mascota"), 3)).isEmpty();
         assertThat(service.findMatch("reserva para 4 y voy con mi perro", f -> false, 3)).contains(MASCOTA);
+    }
+
+    @Test
+    void multiWordKeywordDoesNotMatchByItsFirstWordAlone() {
+        // "parqueadero para motos" no debe matchear solo porque el mensaje dice "parqueadero".
+        assertThat(service.findMatch("¿Tienen parqueadero?")).contains(PARQUEADERO);
+        assertThat(service.findMatch("¿Hay parqueadero para motos?")).contains(PARQUEADERO_MOTOS);
+    }
+
+    @Test
+    void sharedPrefixKeywordsDoNotStealTheSpecificPolicyFaq() {
+        assertThat(service.findMatch("¿Cuál es la política de cancelación?"))
+                .contains(POLITICA_CANCELACION);
     }
 }

@@ -95,3 +95,4 @@ app:
   outbound:
     delay-min-ms: ${OUTBOUND_DELAY_MIN_MS:5000}
     delay-max-ms: ${OUTBOUND_DELAY_MAX_MS:10000}
+    min-delay-ms: ${OUTBOUND_MIN_DELAY_MS:5000}

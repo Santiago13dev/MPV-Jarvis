@@ -24,7 +24,7 @@ import java.util.UUID;
  *
  * Modelo: el restaurante maneja cupos de LLEGADA por franja (no ocupación de mesa por tiempo).
  * reservado(franja) = suma de personas de reservas NORMAL activas en esa franja.
- * VIP = recurso exclusivo (1 reserva activa por fecha + franja).
+ * VIP = un único espacio físico: máximo 1 reserva activa por día (sin importar la franja).
  *
  * Este servicio es de solo lectura. La atomicidad "verificar + crear" la garantiza ReservationService
  * llamando a {@link #check} dentro de la misma transacción que toma el lock de la franja.
@@ -184,9 +184,9 @@ public class ReservationAvailabilityService {
         return new Pool(capacity, r, Math.max(0, capacity - r));
     }
 
-    /** VIP: capacidad 1 (un solo espacio); reserved = reservas VIP activas en la franja. */
+    /** VIP: capacidad 1 (un solo espacio por día); reserved = reservas VIP activas ese día. */
     private Pool vipPool(LocalDate date, LocalTime time, UUID exclude) {
-        long reserved = reservations.countReservations(date, time, ReservationType.VIP,
+        long reserved = reservations.countReservationsByDate(date, ReservationType.VIP,
                 ReservationStatus.ACTIVE, exclude);
         int r = (int) Math.min(reserved, 1);
         return new Pool(1, r, 1 - r);

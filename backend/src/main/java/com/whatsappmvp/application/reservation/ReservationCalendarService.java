@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -39,7 +40,11 @@ public class ReservationCalendarService {
     }
 
     public boolean isOperatingDay(LocalDate date, RestaurantSettingsEntity s) {
-        return s.operatingDaysSet().contains(date.getDayOfWeek());
+        if (s.operatingDaysSet().contains(date.getDayOfWeek())) return true;
+        // Los lunes festivos son un día operativo adicional, configurable. No se abren todos los lunes.
+        return Boolean.TRUE.equals(s.getOpenOnHolidayMondays())
+                && date.getDayOfWeek() == DayOfWeek.MONDAY
+                && ColombianHolidays.isHoliday(date);
     }
 
     /** Franjas del día: desde la hora de inicio hasta la hora final (inclusive) cada N minutos. */
