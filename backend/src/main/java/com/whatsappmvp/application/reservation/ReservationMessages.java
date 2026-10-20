@@ -114,6 +114,16 @@ public class ReservationMessages {
                 + "(" + operatingDaysText() + "). Si prefieres nuestro espacio VIP privado, también puedo reservarlo.";
     }
 
+    /** Respuesta a "¿tienen VIP?" / "¿cómo es el espacio privado?". */
+    public String vipInfo() {
+        RestaurantSettingsEntity s = settingsService.get();
+        return "¡Sí! Tenemos un espacio VIP privado 🥂\n\n"
+                + "• Capacidad: hasta " + s.getVipCapacity() + " personas\n"
+                + "• Valor: " + money(s.getVipPrice()) + " por el espacio completo (no por persona)\n"
+                + "• Disponible " + operatingDaysText() + ", en los horarios de reserva\n\n"
+                + "¿Quieres reservarlo? Dime para cuántas personas y qué día te gustaría.";
+    }
+
     public String askPartySize() {
         return "Perfecto. ¿Para cuántas personas sería?";
     }

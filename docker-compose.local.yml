@@ -1,0 +1,7 @@
+# Override SOLO para desarrollo local (Mac ARM64).
+# Uso: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres backend
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.local

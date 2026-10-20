@@ -10,3 +10,5 @@ target/
 .DS_Store
 Thumbs.db
 nginx_ssl/
+__pycache__/
+*.pyc

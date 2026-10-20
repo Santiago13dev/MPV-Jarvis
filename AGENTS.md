@@ -45,7 +45,7 @@ Pipeline order (two phases: DB work under per-phone lock, external calls outside
 14. **8.5**: Timeout → transfer to human (skipped on the first message)
 15. **9**: AI fallback (OpenAI/Groq)
 
-Key: the reservation engine and FAQs/keywords run **24/7**. The old business-hours gate (step 8) is commented out — AI works 24/7 too. Message sending happens OUTSIDE the lock with a random 5-10s human delay and max 3 concurrent sends.
+Key: the reservation engine and FAQs/keywords run **24/7**. The old business-hours gate (step 8) is commented out — AI works 24/7 too. Message sending happens OUTSIDE the lock with a configurable human delay (`app.outbound.delay-min-ms` / `delay-max-ms`, default 5-10s; local `.env` uses 0-200ms) and max 3 concurrent sends.
 
 ### @lid JID Fix
 - `sendAndPersistResponse()` now uses `remoteJid` (full JID) instead of `phone + @s.whatsapp.net`
@@ -78,6 +78,8 @@ Transiciones validadas por `canTransitionTo()`; invalidas → excepción.
   recuerda "sigo con tu reserva?", borrador intacto), `NOT_HANDLED` (sigue el pipeline)
 - La reserva **solo se crea cuando el cliente confirma** y `ReservationService.create()` tiene éxito
   (clave de idempotencia `wa:<waMessageId>`)
+- Consulta VIP suelta (`¿tienen VIP?`, `¿cuánto cuesta el VIP?`) → `GENERAL_QUESTION` con `type=VIP`:
+  responde capacidad/precio (`ReservationMessages.vipInfo()`) y abre un borrador `CREATE` VIP para seguir el flujo
 
 **Motor de negocio (`ReservationService` — única vía de escritura)**
 - Cupo por slot con `pg_advisory_xact_lock` (concurrencia segura), doble chequeo de idempotencia
@@ -95,7 +97,7 @@ Transiciones validadas por `canTransitionTo()`; invalidas → excepción.
   `GET_RESERVATION`, `PAYMENT_RECEIPT`, `GENERAL_QUESTION`, `NONE`
 
 ### Angular Budget Fix
-- `angular.json` → `anyComponentStyle: maxError` increased from `4kb` to `8kb` (pre-existing build error)
+- `angular.json` → `anyComponentStyle`: `maximumWarning` 6kb, `maximumError` 8kb (el dashboard de reservas y el sidebar superan los 4kb)
 
 ---
 
@@ -187,7 +189,8 @@ docker logs wamvp_whatsapp --tail 20
 - `frontend/src/app/features/reservations/reservations.component.ts` — Dashboard de reservas (buscar, crear, confirmar, cancelar, recibos, disponibilidad del día, configuración)
 - `frontend/src/app/core/services/api.service.ts` — `resetWhatsapp()` + todo el API de reservas (`search/create/update/confirm/cancel/rejectReceipt/uploadReceipt/stats/day-availability/configuration`)
 - `frontend/src/app/core/models/models.ts` — `Reservation`, `ReservationStatus`, `ReservationType`, receipts, settings, capacity rules, blocks, `SlotAvailability`
-- `frontend/angular.json` — Budget: `anyComponentStyle: 8kb`
+- `frontend/nginx.conf` — proxy `/api`, `/ws`, `/uploads` → `backend:8080` (el build de producción usa `apiUrl: '/api'`)
+- `frontend/angular.json` — Budget: `anyComponentStyle` warning 6kb / error 8kb
 
 ### Tests (backend only)
 - `backend/src/test/java/com/whatsappmvp/application/reservation/` — unit tests puros (JUnit 5, sin Spring):
@@ -236,12 +239,12 @@ personas 0/negativas, pregunta de perro en medio del flujo (`QUESTION_WITH_REMIN
 medios de pago, música, parqueadero, mascota, política de cancelación, horarios).
 
 ### Criterio de "excelente" para la demo
-- Todo lo de arriba responde bien; lo que queda **pendiente de re-verificar** (1 pasada de 90s):
-  caso "reserva para 4 mediodía" E2E (ya cubierto por unit test) y regresión de side-FAQ "perro".
+- La última pasada E2E (2026-10-19) quedó en verde: "reserva para 4 mediodía", side-FAQ "perro"/"wifi",
+  VIP, modificación y cancelación. Ver "Pending / Future Work".
 - IA local **sin `GROQ_API_KEY`** → contesta "En este momento no puedo procesar tu consulta…" (processed_by=AI).
   En el VPS sí hay key. Si la demo es local, exportar la key antes de arrancar.
-- La BD local tiene **19 FAQs** (cargadas con `backend/scripts/faq_backup.sql`, que hace `DELETE FROM faq_items`);
-  producción tiene 73. Casos como "¿cuánto cuesta el espacio VIP?" no tienen FAQ local y caen a IA.
+- La BD local tiene **7 FAQs** (producción tiene 73). Casos como "¿cuánto cuesta el espacio VIP?" ya no
+  dependen de FAQ: el motor responde `vipInfo()` directamente.
 - Bug conocido (bajo): "¿me dan un descuento por mi cumpleaños?" empatan promo vs decoración y gana decoración
   (tie-break por prioridad). Arreglar si se ve en la demo.
 
@@ -266,6 +269,30 @@ cd backend && setsid bash -c '
 **Trampas**: `pkill -f "spring-boot:run"` mata la shell propia (el patrón está en la línea de comando — usar
 `ps -eo pid,args | grep -E "[s]pring..."`); integración de Docker WSL está desactivada → `docker` no existe
 (solo `docker.exe`); login de prueba `admin@example.com / admin123`.
+
+### Cómo levantar el entorno local (macOS + Docker Desktop)
+
+```bash
+# Levanta PostgreSQL + backend + dashboard Angular + simulador de WhatsApp (sin QR)
+bash scripts/dev-up.sh
+
+# URLs
+#   Dashboard:  http://localhost:4200   (admin@example.com / admin123)
+#   Simulador:  http://localhost:3001
+#   Backend:    http://localhost:8080
+
+# Detener sin borrar datos
+bash scripts/dev-stop.sh
+```
+
+- `docker-compose.local.yml` + `backend/Dockerfile.local` existen porque las imágenes `alpine` no tienen
+  manifest ARM64; el override compila el backend con `eclipse-temurin:17-jdk`.
+- El nginx del frontend (`frontend/nginx.conf`) hace proxy de `/api`, `/ws` y `/uploads` a `backend:8080`,
+  así el build de producción (`apiUrl: '/api'`) funciona también al abrir el dashboard en `:4200`.
+- `OUTBOUND_DELAY_MIN_MS=0` / `OUTBOUND_DELAY_MAX_MS=200` en `.env` aceleran las pruebas; en producción
+  el default es 5000-10000 ms.
+- Para WhatsApp real con QR: `bash scripts/dev-real-wa.sh` (⚠️ usa un número BOT distinto al de producción;
+  si no, el login local desconecta el de la VPS con error 440).
 
 ---
 
@@ -347,16 +374,16 @@ docker compose -f docker-compose.prod.yml down -v
 ## Pending / Future Work
 
 - [x] Verify reservation flow end-to-end (test "reservar" → "SI" → data)
-- [x] 62 automated tests for the reservation engine (unit + Testcontainers integration)
+- [x] 72 automated tests for the reservation engine (45 unit + 27 Testcontainers integration)
 - [x] Hardening E2E del motor de reservas: ~90 mensajes de cliente, 10 bugs corregidos (ver
       "Reservation Engine — Hardening E2E")
-- [ ] **Última pasada E2E** (90s, backend local): caso "reserva para 4 mediodía" (sin FAQ de horarios pegada)
-      + regresión del side-FAQ "perro" — la lógica ya está en unit test (`FaqMatchingServiceTest`)
-- [ ] **Commit pendiente** (8+2 archivos sin commitear: `MessageProcessingService`, `FaqMatchingService`,
-      `ReservationIntentExtractor`, `ReservationConversationService`, `ReservationMessages`,
-      `ReservationExpirationJob`, `ReservationDraftJpaRepository` + tests)
+- [x] **Última pasada E2E (2026-10-19, local macOS)**: VIP info/creación/bloqueo duplicado, normal,
+      modificación 5→6 ($240.000), cancelación + liberación de franja VIP, "reserva para 4 mediodía"
+      y side-FAQ "perro"/"wifi" con recordatorio. 45 unit tests en verde.
+- [ ] **Commit pendiente** (fix VIP + delay configurable + proxy nginx + tooling local `dev-*.sh`;
+      ver `git status`)
 - [ ] `GROQ_API_KEY` en local si la demo se hace sin VPS (si no, la IA contesta el fallback genérico)
-- [ ] Cargar las 73 FAQs de producción en local (`faq_backup.sql` solo trae 19)
+- [ ] Cargar las 73 FAQs de producción en local (la BD local tiene 7)
 - [ ] Tie-break de FAQs con score empatado ("descuento" vs "cumpleaños")
 - [ ] Tests for REST controllers (`ReservationController`, `ReservationConfigController`) and `MessageProcessingService`
 - [ ] Frontend test setup (karma/jasmine) + specs for `reservations.component.ts`

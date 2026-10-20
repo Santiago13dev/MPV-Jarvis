@@ -15,6 +15,7 @@ public class AppProperties {
     private Admin admin = new Admin();
     private RateLimit rateLimit = new RateLimit();
     private Uploads uploads = new Uploads();
+    private Outbound outbound = new Outbound();
 
     @Data
     public static class Jwt {
@@ -56,5 +57,15 @@ public class AppProperties {
     public static class Uploads {
         private String basePath;
         private String baseUrl;
+    }
+
+    /**
+     * Delay humano antes de enviar cada mensaje saliente.
+     * Producción: 5-10s para no parecer spam. Local: 0-200ms para pruebas rápidas.
+     */
+    @Data
+    public static class Outbound {
+        private long delayMinMs = 5000;
+        private long delayMaxMs = 10000;
     }
 }

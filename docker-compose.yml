@@ -73,6 +73,8 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       ADMIN_PHONE: ${ADMIN_PHONE:-}
+      OUTBOUND_DELAY_MIN_MS: ${OUTBOUND_DELAY_MIN_MS:-5000}
+      OUTBOUND_DELAY_MAX_MS: ${OUTBOUND_DELAY_MAX_MS:-10000}
     ports:
       - "8080:8080"   # Solo para dev
     volumes:

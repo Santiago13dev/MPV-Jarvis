@@ -210,6 +210,20 @@ public class ReservationConversationService {
                 yield awaitingPayment ? Result.reply(msg.askReceiptImage())
                         : Result.reply(!upcoming.isEmpty() ? msg.noPendingPayment() : msg.noReservations());
             }
+            case GENERAL_QUESTION -> {
+                // "¿tienen VIP?" / "¿cómo es el espacio privado?" no debe caer a la IA genérica:
+                // se informa el VIP y se arranca el flujo de reserva con el tipo ya elegido.
+                if (x.type() == ReservationType.VIP) {
+                    ReservationDraftEntity d = newDraft(conv, Mode.CREATE);
+                    d.setReservationType(ReservationType.VIP);
+                    if (x.partySize() == null && !x.date().isResolved() && !x.time().hasTime()) {
+                        yield ask(d, A_PARTY, msg.vipInfo());
+                    }
+                    Result next = advanceCreate(d, x, conv, phone, waId, s);
+                    yield Result.reply(msg.vipInfo() + "\n\n" + next.text());
+                }
+                yield Result.notHandled();
+            }
             default -> Result.notHandled();
         };
     }

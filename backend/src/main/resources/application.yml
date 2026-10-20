@@ -89,3 +89,9 @@ app:
   uploads:
     base-path: ${UPLOADS_PATH:/app/uploads}
     base-url: ${UPLOADS_BASE_URL:http://localhost:8080/uploads}
+
+  # ── Delay humano de envío (ms) ──────────────────────────────────────────────
+  # Producción: 5000-10000. Local/pruebas: 0-200 vía variables de entorno.
+  outbound:
+    delay-min-ms: ${OUTBOUND_DELAY_MIN_MS:5000}
+    delay-max-ms: ${OUTBOUND_DELAY_MAX_MS:10000}
