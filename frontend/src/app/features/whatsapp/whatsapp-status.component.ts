@@ -64,8 +64,14 @@ import { SessionStatus } from '../../core/models/models';
         </p>
         <div class="qr-wrapper" *ngIf="qrCode; else waitingQr">
           <img [src]="qrCode" alt="WhatsApp QR Code" class="qr-image">
+          <div class="qr-progress" *ngIf="qrSecondsLeft > 0">
+            <div class="qr-progress-bar" [style.width.%]="qrProgress"></div>
+          </div>
           <p class="text-xs text-muted" style="margin-top:var(--spacing-sm)">
-            El QR se actualiza automáticamente cada 60 segundos
+            <ng-container *ngIf="qrSecondsLeft > 0; else renewing">
+              Escanéalo ahora · se renueva en {{ qrSecondsLeft }} s
+            </ng-container>
+            <ng-template #renewing>Renovando el código…</ng-template>
           </p>
         </div>
         <ng-template #waitingQr>
@@ -199,6 +205,14 @@ import { SessionStatus } from '../../core/models/models';
     @media (max-width: 480px) {
       .qr-image { width: 200px; height: 200px; }
       .qr-placeholder { height: 160px; }
+      .qr-progress {
+        width: 200px; height: 4px; margin-top: var(--spacing-md);
+        background: rgba(0,0,0,0.08); border-radius: 2px; overflow: hidden;
+      }
+      .qr-progress-bar {
+        height: 100%; background: var(--color-primary);
+        transition: width 1s linear;
+      }
     }
 
     /* Instructions */
@@ -231,9 +245,37 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
   qrCode: string | null = null;
   connectedAt: string | null = null;
   errorMessage: string | null = null;
+  qrExpiresAt = 0;
+  now = Date.now();
 
   private subs = new Subscription();
   private qrPollingInterval: any;
+  private ticker: any;
+
+  get qrSecondsLeft(): number {
+    if (!this.qrExpiresAt) return 0;
+    return Math.max(0, Math.round((this.qrExpiresAt - this.now) / 1000));
+  }
+
+  /** % de vida restante del QR (60 s), para la barra */
+  get qrProgress(): number {
+    return Math.min(100, Math.max(0, (this.qrSecondsLeft / 60) * 100));
+  }
+
+  private applyQr(data: { qr?: string | null; expiresInMs?: number | null; status?: string } | null | undefined): void {
+    if (!data) return;
+    if (data.qr) {
+      const changed = data.qr !== this.qrCode;
+      this.qrCode = data.qr;
+      // Solo reinicia el contador cuando llega un QR distinto
+      if (changed || !this.qrExpiresAt) {
+        this.qrExpiresAt = Date.now() + (data.expiresInMs ?? 60_000);
+      }
+    }
+    if (data.status && data.status !== 'ERROR') {
+      this.status = data.status as SessionStatus;
+    }
+  }
 
   get statusLabel(): string {
     const m: Record<SessionStatus, string> = {
@@ -267,19 +309,17 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
       })
     );
 
-    // Polling del QR cada 20 segundos si está esperando
+    // Polling del QR cada 5 s mientras espera escaneo (el QR vive 60 s)
     this.qrPollingInterval = setInterval(() => {
       if (this.status === 'QR_READY' || this.status === 'CONNECTING') {
         this.api.getQrCode().pipe(
           catchError(() => EMPTY)
-        ).subscribe(r => {
-          if (r?.data) {
-            if (r.data.qr) this.qrCode = r.data.qr;
-            if (r.data.status && r.data.status !== 'ERROR') this.status = r.data.status as SessionStatus;
-          }
-        });
+        ).subscribe(r => this.applyQr(r?.data));
       }
-    }, 20000);
+    }, 5000);
+
+    // Contador de vencimiento del QR
+    this.ticker = setInterval(() => { this.now = Date.now(); }, 1000);
   }
 
   refreshStatus(): void {
@@ -296,12 +336,7 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
     });
     this.api.getQrCode().pipe(
       catchError(() => EMPTY)
-    ).subscribe(r => {
-      if (r?.data) {
-        if (r.data.qr) this.qrCode = r.data.qr;
-        if (r.data.status && r.data.status !== 'ERROR') this.status = r.data.status as SessionStatus;
-      }
-    });
+    ).subscribe(r => this.applyQr(r?.data));
   }
 
   reconnect(): void {
@@ -336,5 +371,6 @@ export class WhatsappStatusComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.subs.unsubscribe();
     clearInterval(this.qrPollingInterval);
+    clearInterval(this.ticker);
   }
 }

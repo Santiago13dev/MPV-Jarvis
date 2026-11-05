@@ -549,6 +549,22 @@ docker compose -f docker-compose.prod.yml down -v
 
 ## WhatsApp Connection Troubleshooting
 
+### QR estable (fix 2026-11-05)
+
+Síntomas previos: al escanear, la sesión se cerraba y volvía a abrir, y el QR cambiaba a mitad del escaneo.
+
+| Causa | Fix en `whatsapp-service/src/whatsapp/client.js` |
+|---|---|
+| `qrTimeout` por defecto: el primer QR dura 60 s y los siguientes solo 20 s | `qrTimeout: 60_000` + `qrGeneratedAt` y `expiresInMs` en `/session/qr` |
+| `connect()` podía crear un segundo socket (doble QR / 440) | flag `connecting` + cierre explícito del socket anterior + `currentSock !== sock` ignora eventos viejos |
+| 515 (`restartRequired`) tras escanear: se esperaban **3 minutos** | reconecta en **3 s** con las credenciales guardadas; a los 3 seguidos, pausa de 3 min |
+| 401 en bucle: cada cierre borraba credenciales y reintentaba sin límite | máximo 2 auto-resets cada 15 min; después pide "Reiniciar sesión" manual |
+| Health check enviaba presence cada 45 s y forzaba reconexión | solo verifica `sock.ws.isOpen` (sin falsos positivos) |
+| Dashboard mostraba el QR "parpadeando" | polling cada 5 s, contador de vencimiento y barra de progreso; el QR se mantiene hasta que llega uno nuevo |
+
+**Si vuelve a desconectarse al escanear**, mirar `docker logs wamvp_whatsapp --tail 30`: el `statusCode` dice la causa
+(440 = mismo número en otra instancia/WhatsApp Web, 401 = dispositivo desvinculado, 515 = reinicio normal).
+
 ### Error Codes Reference
 
 | Code | Meaning | Action |

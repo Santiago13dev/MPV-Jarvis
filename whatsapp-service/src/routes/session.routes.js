@@ -21,22 +21,31 @@ router.get('/status', (req, res) => {
 
 // GET /session/qr — retorna el QR en base64 si está disponible
 router.get('/qr', (req, res) => {
-  const qr = waClient.getQR();
+  const info = waClient.getQRInfo
+    ? waClient.getQRInfo()
+    : { qr: waClient.getQR(), generatedAt: null, expiresInMs: null };
   const status = waClient.getStatus();
 
   if (status === 'CONNECTED') {
-    return res.json({ status: 'CONNECTED', qr: null });
+    return res.json({ status: 'CONNECTED', qr: null, generatedAt: null, expiresInMs: null });
   }
 
-  if (!qr) {
+  if (!info.qr) {
     return res.status(202).json({
       status,
       message: 'QR not ready yet. Retry in a few seconds.',
       qr: null,
+      generatedAt: null,
+      expiresInMs: null,
     });
   }
 
-  res.json({ status, qr });
+  res.json({
+    status,
+    qr: info.qr,
+    generatedAt: info.generatedAt,
+    expiresInMs: info.expiresInMs,
+  });
 });
 
 // POST /session/reconnect — forzar reconexión

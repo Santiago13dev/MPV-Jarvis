@@ -31,12 +31,22 @@ const logger = pino({ level: config.nodeEnv === 'production' ? 'warn' : 'debug' 
 // ── Estado interno del módulo ──────────────────────────────────────────────────
 let sock = null;
 let qrBase64 = null;
+let qrGeneratedAt = null;   // timestamp del QR actual (para mostrar el vencimiento en el dashboard)
 let sessionStatus = 'DISCONNECTED'; // DISCONNECTED | CONNECTING | QR_READY | CONNECTED | ERROR
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let permanentDisconnect = false; // true after 401/403 — blocks ALL reconnects
 let healthCheckInterval = null;
 let lastPongTime = Date.now();
+let connecting = false;      // evita dos sockets a la vez (causa 440 y QR que baila)
+let reset401Attempts = 0;    // límite de auto-resets por 401
+let last401At = 0;
+let consecutive515 = 0;
+
+// Un QR vive 60s (Baileys baja a 20s a partir del segundo). Mantenerlo 60s
+// evita el "parpadeo" cuando el usuario está apuntando con la cámara.
+const QR_TTL_MS = 60_000;
+
 
 // Encuestas (polls) enviadas: se guardan para poder descifrar el voto que llega después.
 // La clave de cifrado viaja en el mensaje original, no en el voto.
@@ -57,6 +67,18 @@ const getQR = () => qrBase64;
 const getSocket = () => sock;
 
 /**
+ * Datos del QR actual para el dashboard: cuánto le queda de vida.
+ */
+function getQRInfo() {
+  if (!qrBase64 || !qrGeneratedAt) return { qr: null, generatedAt: null, expiresInMs: null };
+  return {
+    qr: qrBase64,
+    generatedAt: new Date(qrGeneratedAt).toISOString(),
+    expiresInMs: Math.max(0, QR_TTL_MS - (Date.now() - qrGeneratedAt)),
+  };
+}
+
+/**
  * Actualiza el estado y notifica al backend via webhook
  */
 async function setStatus(newStatus, extra = {}) {
@@ -69,28 +91,19 @@ async function setStatus(newStatus, extra = {}) {
   }
 }
 
-// ── Health Check: keep-alive y auto-reconexión ───────────────────────────────
+// ── Health Check: detectar socket muerto sin generar falsos positivos ────────
 function startHealthCheck() {
   stopHealthCheck();
   lastPongTime = Date.now();
   healthCheckInterval = setInterval(async () => {
     if (!sock || sessionStatus !== 'CONNECTED') return;
-    try {
-      // Enviar ping via presence update (keep-alive ligero)
-      const jid = sock.user?.id;
-      if (jid) {
-        await sock.sendPresenceUpdate('available', jid.split(':')[0] + '@s.whatsapp.net');
-      }
-      lastPongTime = Date.now();
-    } catch (err) {
-      logger.warn({ err: err.message }, '[WA] Health check ping failed');
-      // Si el ping falla, verificar cuánto tiempo sin respuesta
-      const timeSinceLastPong = Date.now() - lastPongTime;
-      if (timeSinceLastPong > HEALTH_CHECK_TIMEOUT_MS) {
-        logger.error('[WA] Health check timeout — socket may be dead, forcing reconnect');
-        await forceReconnect('HEALTH_CHECK_TIMEOUT');
-      }
+    const isOpen = typeof sock.ws?.isOpen === 'boolean' ? sock.ws.isOpen : true;
+    if (!isOpen) {
+      logger.error('[WA] Socket cerrado internamente — reconectando');
+      await forceReconnect('SOCKET_CLOSED');
+      return;
     }
+    lastPongTime = Date.now();
   }, HEALTH_CHECK_INTERVAL_MS);
 }
 
@@ -140,9 +153,29 @@ async function connect() {
     logger.warn('[WA] permanentDisconnect active — aborting connect()');
     return;
   }
+
+  // Nunca abrir un segundo socket: dos conexiones con el mismo número producen
+  // 440 (connection replaced) y un QR que se invalida solo ("se desconecta y se reconecta").
+  if (connecting) {
+    logger.warn('[WA] connect() ya está en curso — se ignora la llamada duplicada');
+    return;
+  }
+  if (sock && sessionStatus === 'CONNECTED') {
+    logger.info('[WA] Ya hay una sesión conectada — connect() omitido');
+    return;
+  }
+
+  connecting = true;
   try {
+    // Cerrar explícitamente el socket anterior (QR viejo o reconexión) antes de crear otro
+    if (sock) {
+      try { await sock.end(undefined); } catch (_) {}
+      sock = null;
+    }
+
     await setStatus('CONNECTING');
     qrBase64 = null;
+    qrGeneratedAt = null;
 
     const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
     logger.info({ sessionsPath }, '[WA] Loading auth state...');
@@ -181,7 +214,6 @@ async function connect() {
     sock = makeWASocket({
       version,
       logger: pino({ level: config.nodeEnv === 'production' ? 'warn' : 'silent' }),
-      printQRInTerminal: config.nodeEnv !== 'production',
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, pino({ level: config.nodeEnv === 'production' ? 'warn' : 'silent' })),
@@ -190,21 +222,33 @@ async function connect() {
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 25_000, // Reducido de 30s a 25s para mayor estabilidad
       retryRequestDelayMs: 2_000,
+      // Cada QR vive 60s (Baileys usa 20s para los siguientes por defecto):
+      // así alcanzas a escanear sin que cambie a mitad de camino.
+      qrTimeout: QR_TTL_MS,
       // Ignorar mensajes de broadcast/estado
       shouldIgnoreJid: jid => isJidBroadcast(jid),
     });
+
+    // Referencia al socket de ESTA conexión: los eventos de sockets viejos se ignoran
+    const currentSock = sock;
 
     // ── Event Listeners ─────────────────────────────────────────────────────────
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
+      if (currentSock !== sock) {
+        logger.debug('[WA] Evento de un socket antiguo — ignorado');
+        return;
+      }
+
       const { connection, lastDisconnect, qr } = update;
 
       // QR code disponible
       if (qr) {
         try {
           qrBase64 = await QRCode.toDataURL(qr);
+          qrGeneratedAt = Date.now();
           await setStatus('QR_READY', { qrCode: qrBase64 });
           logger.info('[WA] QR code generated — waiting for scan');
         } catch (err) {
@@ -215,8 +259,11 @@ async function connect() {
       // Conexión establecida
       if (connection === 'open') {
         qrBase64 = null;
+        qrGeneratedAt = null;
         reconnectAttempts = 0;
         conflictRetries = 0;
+        consecutive515 = 0;
+        reset401Attempts = 0;
         lastPongTime = Date.now();
         const phoneNumber = sock.user?.id?.split(':')[0] || 'unknown';
         await setStatus('CONNECTED', { phoneNumber });
@@ -234,9 +281,26 @@ async function connect() {
         // Notificar al admin de la desconexión
         await notifyAdminDisconnect(`Code: ${statusCode || 'unknown'}`);
 
-        // 401 = Logged Out — credenciales inválidas, auto-reset y reconnect con QR nuevo
+        // 401 = Logged Out — credenciales inválidas. Se regenera el QR, pero con límite:
+        // si WhatsApp sigue cerrando la sesión, reintentar en bucle empeora el bloqueo.
         if (statusCode === DisconnectReason.loggedOut) {
-          logger.warn('[WA] Session logged out (401) — auto-resetting sessions');
+          const now = Date.now();
+          if (now - last401At > 15 * 60 * 1000) reset401Attempts = 0;
+          last401At = now;
+          reset401Attempts++;
+
+          if (reset401Attempts > 2) {
+            permanentDisconnect = true;
+            if (sock) { try { await sock.end(); } catch (_) {} }
+            sock = null;
+            await setStatus('ERROR', {
+              error: 'Sesión cerrada por WhatsApp (401) repetidamente. Espera 1-2 h y usa "Reiniciar sesión".',
+            });
+            logger.error('[WA] 401 repetido — se detienen los reintentos automáticos');
+            return;
+          }
+
+          logger.warn({ reset401Attempts }, '[WA] Session logged out (401) — auto-resetting sessions');
           if (sock) { try { await sock.end(); } catch (_) {} }
           sock = null;
           // Borrar sesiones stale para generar QR fresco
@@ -246,6 +310,7 @@ async function connect() {
             logger.info({ path: sessionsPath }, '[WA] Deleted stale session files (401 auto-reset)');
           }
           qrBase64 = null;
+          qrGeneratedAt = null;
           await setStatus('QR_READY', { reason: 'AUTO_RESET_401' });
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(connect, 5000);
@@ -264,13 +329,19 @@ async function connect() {
           return;
         }
 
-        // 440 = Connection Replaced — otro dispositivo se conectó
+        // 440 = Connection Replaced — otro dispositivo/servidor usó el mismo número
         if (statusCode === 440) {
           conflictRetries++;
+          if (sock) { try { await sock.end(); } catch (_) {} }
+          sock = null;
+          qrBase64 = null;
+          qrGeneratedAt = null;
           if (conflictRetries >= MAX_CONFLICT_RETRIES) {
             // Demasiados conflictos — cooldown largo para evitar loop infinito
             logger.error({ conflictRetries }, '[WA] Too many conflicts — entering 10 min cooldown');
-            await setStatus('ERROR', { error: 'Conflict loop — cooling down 10 min' });
+            await setStatus('ERROR', {
+              error: 'Ese número se está usando en otro lado (WhatsApp Web, otro celular o el servidor de producción). Desvincula los otros dispositivos y reintenta.',
+            });
             if (reconnectTimer) clearTimeout(reconnectTimer);
             reconnectTimer = setTimeout(() => {
               conflictRetries = 0;
@@ -285,14 +356,31 @@ async function connect() {
           return;
         }
 
-        // 515 = WhatsApp server dropped connection (rate limit / anti-spam)
+        // 515 = "restart required": ocurre justo después de escanear el QR.
+        // Las credenciales YA quedaron guardadas, así que se reconecta de inmediato
+        // (antes se esperaban 3 minutos y parecía que el escaneo había fallado).
         if (statusCode === 515) {
-          logger.error('[WA] Server dropped connection (515) — cooldown 3 min');
-          await setStatus('ERROR', { error: 'Server rate limit (515) — cooling down' });
+          consecutive515++;
           if (sock) { try { await sock.end(); } catch (_) {} }
           sock = null;
+          qrBase64 = null;
+          qrGeneratedAt = null;
+
+          if (consecutive515 >= 3) {
+            logger.error({ consecutive515 }, '[WA] 515 repetido — pausa de 3 min');
+            await setStatus('ERROR', { error: 'WhatsApp cortó la conexión (515). Reintentando en 3 min.' });
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(() => {
+              consecutive515 = 0;
+              connect();
+            }, 3 * 60 * 1000);
+            return;
+          }
+
+          logger.warn({ consecutive515 }, '[WA] Restart required (515) — reconectando en 3s con las credenciales guardadas');
+          await setStatus('CONNECTING', { reason: 'RESTART_515' });
           if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 3 * 60 * 1000);
+          reconnectTimer = setTimeout(connect, 3000);
           return;
         }
 
@@ -383,6 +471,8 @@ async function connect() {
     logger.error({ err }, '[WA] Fatal error during connect()');
     await setStatus('ERROR', { error: err.message });
     scheduleReconnect();
+  } finally {
+    connecting = false;
   }
 }
 
@@ -430,6 +520,10 @@ async function disconnect() {
       await sock.logout();
       sock = null;
     }
+    qrBase64 = null;
+    qrGeneratedAt = null;
+    consecutive515 = 0;
+    reset401Attempts = 0;
     await setStatus('DISCONNECTED', { reason: 'MANUAL' });
     logger.info('[WA] Disconnected manually');
   } catch (err) {
@@ -450,6 +544,9 @@ async function resetSession() {
     reconnectTimer = null;
     reconnectAttempts = 0;
     conflictRetries = 0;
+    consecutive515 = 0;
+    reset401Attempts = 0;
+    last401At = 0;
 
     // Cerrar socket actual si existe
     if (sock) {
@@ -466,6 +563,7 @@ async function resetSession() {
     }
 
     qrBase64 = null;
+    qrGeneratedAt = null;
     await setStatus('DISCONNECTED', { reason: 'RESET' });
     logger.info('[WA] Session reset — waiting 5s before fresh connect');
 
@@ -612,6 +710,7 @@ module.exports = {
   resetSession,
   getStatus,
   getQR,
+  getQRInfo,
   getSocket,
   sendTextMessage,
   sendPollMessage,

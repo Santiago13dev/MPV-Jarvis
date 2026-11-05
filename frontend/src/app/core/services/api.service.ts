@@ -101,8 +101,8 @@ export class ApiService {
     return this.http.get<ApiResponse<WhatsappSession>>(`${this.base}/whatsapp/session`);
   }
 
-  getQrCode(): Observable<ApiResponse<{ status: string; qr: string | null }>> {
-    return this.http.get<ApiResponse<{ status: string; qr: string | null }>>(`${this.base}/whatsapp/qr`);
+  getQrCode(): Observable<ApiResponse<{ status: string; qr: string | null; generatedAt?: string | null; expiresInMs?: number | null }>> {
+    return this.http.get<ApiResponse<{ status: string; qr: string | null; generatedAt?: string | null; expiresInMs?: number | null }>>(`${this.base}/whatsapp/qr`);
   }
 
   reconnectWhatsapp(): Observable<ApiResponse<void>> {

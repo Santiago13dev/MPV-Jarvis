@@ -24,6 +24,7 @@ const isConfigured = () => Boolean(
 
 const getStatus = () => (isConfigured() ? 'CONNECTED' : 'DISCONNECTED');
 const getQR = () => null;
+const getQRInfo = () => ({ qr: null, generatedAt: null, expiresInMs: null });
 
 /**
  * Normaliza un destino a formato Twilio: whatsapp:+573001234567
@@ -114,6 +115,7 @@ module.exports = {
   resetSession,
   getStatus,
   getQR,
+  getQRInfo,
   sendTextMessage,
   sendPollMessage,
   sendImageMessage,
