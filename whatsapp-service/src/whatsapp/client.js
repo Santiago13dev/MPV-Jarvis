@@ -174,8 +174,6 @@ async function connect() {
     }
 
     await setStatus('CONNECTING');
-    qrBase64 = null;
-    qrGeneratedAt = null;
 
     const sessionsPath = path.resolve(config.sessionsDir, config.sessionName);
     logger.info({ sessionsPath }, '[WA] Loading auth state...');
@@ -381,6 +379,17 @@ async function connect() {
           await setStatus('CONNECTING', { reason: 'RESTART_515' });
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(connect, 3000);
+          return;
+        }
+
+        // 408 = timeout / el QR se agotó: reintento rápido, sin backoff (no cuenta como fallo)
+        if (statusCode === DisconnectReason.timedOut) {
+          logger.info('[WA] QR expirado o timeout de red — generando uno nuevo en 2s');
+          if (sock) { try { await sock.end(); } catch (_) {} }
+          sock = null;
+          await setStatus('QR_READY', { reason: 'QR_EXPIRED' });
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 2000);
           return;
         }
 
