@@ -1,6 +1,7 @@
 package com.whatsappmvp.application.reservation;
 
 import com.whatsappmvp.application.reservation.AvailabilityModels.*;
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import com.whatsappmvp.infrastructure.persistence.entity.RestaurantSettingsEntity;
@@ -53,23 +54,30 @@ public class ReservationAvailabilityService {
     /** Valida una solicitud concreta. {@code excludeId}: reserva propia a ignorar (modificaciones). */
     @Transactional(readOnly = true)
     public RequestCheck check(LocalDate date, LocalTime time, ReservationType type, int partySize, UUID excludeId) {
+        return check(date, time, type, partySize, excludeId, null, null);
+    }
+
+    /** Igual que {@link #check(LocalDate, LocalTime, ReservationType, int, UUID)}, incluyendo celebración. */
+    @Transactional(readOnly = true)
+    public RequestCheck check(LocalDate date, LocalTime time, ReservationType type, int partySize, UUID excludeId,
+                              CelebrationType celebration, Integer honorees) {
         RestaurantSettingsEntity s = settingsService.get();
         UUID exclude = excludeId != null ? excludeId : NO_EXCLUDE;
         ReservationType t = type != null ? type : ReservationType.NORMAL;
 
-        PriceQuote price = partySize > 0 ? pricing.quote(t, partySize, s) : null;
+        PriceQuote price = partySize > 0 ? pricing.quote(t, partySize, celebration, honorees, s) : null;
 
         if (partySize <= 0) {
             return fail(Reason.INVALID_PARTY_SIZE, date, time, t, partySize, null, price, List.of(), List.of());
         }
 
-        Reason slotReason = validateSlot(date, time, s);
+        Reason slotReason = validateSlot(date, time, s, t);
         if (slotReason != Reason.OK) {
             boolean dateLevel = slotReason == Reason.CLOSED_DAY || slotReason == Reason.PAST_DATE
                     || (slotReason == Reason.BLOCKED && calendar.isDateBlocked(date));
             List<LocalDate> nextDays = dateLevel
                     ? calendar.nextBookableDays(date.isBefore(calendar.today()) ? calendar.today() : date.plusDays(1),
-                    NEXT_DAYS_TO_OFFER, s)
+                    NEXT_DAYS_TO_OFFER, s, t)
                     : List.of();
             List<LocalTime> alts = dateLevel ? List.of()
                     : alternatives(date, time, t, partySize, exclude, s);
@@ -97,7 +105,8 @@ public class ReservationAvailabilityService {
         }
 
         // NORMAL
-        if (partySize > s.getMaxPartySize()) {
+        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : 0;
+        if (maxParty > 0 && partySize > maxParty) {
             return fail(Reason.PARTY_TOO_LARGE, date, time, t, partySize, null, price, List.of(), List.of());
         }
         Pool normal = normalPool(date, time, s, exclude);
@@ -120,7 +129,7 @@ public class ReservationAvailabilityService {
     @Transactional(readOnly = true)
     public AvailabilityResult getAvailability(LocalDate date, LocalTime time) {
         RestaurantSettingsEntity s = settingsService.get();
-        Reason r = validateSlot(date, time, s);
+        Reason r = validateSlot(date, time, s, null);
         if (r != Reason.OK) {
             return new AvailabilityResult(date, time, false, r, null, null);
         }
@@ -156,10 +165,10 @@ public class ReservationAvailabilityService {
     // Internos
     // ──────────────────────────────────────────────────────────────────────
 
-    private Reason validateSlot(LocalDate date, LocalTime time, RestaurantSettingsEntity s) {
+    private Reason validateSlot(LocalDate date, LocalTime time, RestaurantSettingsEntity s, ReservationType type) {
         if (date == null || time == null) return Reason.INVALID_SLOT;
         if (date.isBefore(calendar.today())) return Reason.PAST_DATE;
-        if (!calendar.isOperatingDay(date, s)) return Reason.CLOSED_DAY;
+        if (!calendar.isOperatingDay(date, s, type)) return Reason.CLOSED_DAY;
         if (calendar.isDateBlocked(date)) return Reason.BLOCKED;
         if (!calendar.slotTimes(s).contains(time)) return Reason.INVALID_SLOT;
         if (calendar.isSlotBlocked(date, time)) return Reason.BLOCKED;
@@ -212,12 +221,13 @@ public class ReservationAvailabilityService {
     private List<LocalTime> slotsThatFit(LocalDate date, ReservationType type, int partySize,
                                          UUID exclude, RestaurantSettingsEntity s) {
         List<LocalTime> fits = new ArrayList<>();
-        if (partySize <= 0 || !calendar.isDayBookable(date, s)) return fits;
+        if (partySize <= 0 || !calendar.isDayBookable(date, s, type)) return fits;
         if (type == ReservationType.VIP && partySize > s.getVipCapacity()) return fits;
-        if (type == ReservationType.NORMAL && partySize > s.getMaxPartySize()) return fits;
+        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : 0;
+        if (type == ReservationType.NORMAL && maxParty > 0 && partySize > maxParty) return fits;
         List<SlotCapacityRuleEntity> rules = capacityRules.findAll();
         for (LocalTime t : calendar.slotTimes(s)) {
-            if (validateSlot(date, t, s) != Reason.OK) continue;
+            if (validateSlot(date, t, s, type) != Reason.OK) continue;
             if (type == ReservationType.VIP) {
                 if (vipPool(date, t, exclude).available() < 1) continue;
                 if (Boolean.TRUE.equals(s.getVipConsumesNormalCapacity())

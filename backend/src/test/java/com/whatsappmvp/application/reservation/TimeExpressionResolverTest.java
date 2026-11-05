@@ -62,4 +62,15 @@ class TimeExpressionResolverTest {
         assertThat(resolver.resolve("2", PIVOT, false).hasTime()).isFalse();
         assertThat(resolver.resolve("2", PIVOT, true).time()).isEqualTo(LocalTime.of(14, 0));
     }
+
+    @Test
+    void compactAndSeparatorFormatsPeopleActuallyType() {
+        assertThat(time("1-00pm")).isEqualTo(LocalTime.of(13, 0));
+        assertThat(time("1.00pm")).isEqualTo(LocalTime.of(13, 0));
+        assertThat(time("100pm")).isEqualTo(LocalTime.of(13, 0));
+        assertThat(time("1230pm")).isEqualTo(LocalTime.of(12, 30));
+        assertThat(resolver.resolve("1-00", PIVOT, true).time()).isEqualTo(LocalTime.of(13, 0));
+        assertThat(resolver.resolve("100", PIVOT, true).time()).isEqualTo(LocalTime.of(13, 0));
+        assertThat(resolver.resolve("1230", PIVOT, true).time()).isEqualTo(LocalTime.of(12, 30));
+    }
 }

@@ -1,5 +1,6 @@
 package com.whatsappmvp.infrastructure.persistence.entity;
 
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationType;
 import jakarta.persistence.*;
 import lombok.*;
@@ -58,8 +59,23 @@ public class ReservationDraftEntity {
     @Column(name = "customer_name")
     private String customerName;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "celebration_type", length = 30)
+    private CelebrationType celebrationType;
+
+    @Column
+    private Integer honorees;
+
     @Column(name = "receipt_phone", length = 50)
     private String receiptPhone;
+
+    /**
+     * Respuestas seguidas que no se entendieron en la encuesta de celebración.
+     * A la segunda se asume "solo guardar el espacio" para no dejar al cliente atrapado.
+     */
+    @Column(name = "survey_attempts", nullable = false)
+    @Builder.Default
+    private Integer surveyAttempts = 0;
 
     @Column(name = "target_reservation_id")
     private UUID targetReservationId;

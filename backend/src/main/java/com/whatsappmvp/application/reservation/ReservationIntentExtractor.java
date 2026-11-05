@@ -80,7 +80,7 @@ public class ReservationIntentExtractor {
             + "octubre|noviembre|diciembre";
 
     private static final Pattern PARTY_A = Pattern.compile(
-            "\\b" + NUM + "\\s*(?:personas?|pax|invitados|adultos|comensales|amigos|familiares)\\b");
+            "\\b" + NUM + "\\s*(?:personas?|pers?|pax|invitados|adultos|comensales|amigos|familiares)\\b");
     private static final Pattern PARTY_B = Pattern.compile(
             "\\b(?:para|somos|seremos|vamos|seriamos|seria|grupo de|mesa de)\\s+(?:unas\\s+)?" + NUM
                     + "\\b(?!\\s*(?:am|pm|:|/|de\\s+(?:la|el|" + MONTHS + ")))");
@@ -102,7 +102,16 @@ public class ReservationIntentExtractor {
 
     private static final Set<String> NAME_STOP = Set.of(
             "y", "e", "para", "el", "la", "quiero", "somos", "a", "con", "por", "en", "los", "las", "un", "una",
-            "reserva", "mesa", "vip", "hoy", "manana", "sabado", "domingo");
+            "reserva", "mesa", "vip", "hoy", "manana", "sabado", "domingo",
+            // saludos y palabras del flujo que nunca son un nombre
+            "hola", "buenas", "buenos", "dias", "tardes", "noches", "hey", "gracias",
+            "cumple", "cumpleanos", "aniversario", "grado", "graduacion", "comunion", "celebracion",
+            "decoracion", "normal", "si", "no", "ok", "listo");
+
+    /** Textos que parecen nombre pero son etiquetas del formulario ("Nombre de quien reserva"). */
+    private static final Set<String> NAME_BLOCK = Set.of(
+            "de quien", "de quienes", "quien", "quienes", "nombre", "el cliente", "cliente",
+            "la persona", "persona", "titular", "de la reserva", "a nombre");
 
     private static final Set<String> YES = Set.of(
             "si", "sii", "siii", "sip", "dale", "ok", "okay", "okey", "listo", "claro", "confirmo", "confirmar",
@@ -127,7 +136,12 @@ public class ReservationIntentExtractor {
         String n = TextNormalizer.normalize(raw);
 
         DateExpressionResolver.Resolution date = dateResolver.resolve(raw);
-        TimeExpressionResolver.Resolution time = timeResolver.resolve(raw, ctx.pmPivotHour(), ctx.awaiting("TIME"));
+        boolean bareTime = ctx.awaiting("TIME") || ctx.awaiting("TIME_ANY") || ctx.awaiting("CHANGES");
+        // En la confirmación el cliente corrige con "1-00", "1230" o "1:30": solo formas de reloj.
+        if (!bareTime && ctx.awaiting("CONFIRM")) {
+            bareTime = n.matches("\\d{1,2}\\s*[:.\\-]\\s*\\d{2}|\\d{3,4}");
+        }
+        TimeExpressionResolver.Resolution time = timeResolver.resolve(raw, ctx.pmPivotHour(), bareTime);
 
         // "pasarla del sábado a las 2 al domingo a las 3": el destino es lo que sigue a "al / para el"
         if (ctx.modifyMode()) {
@@ -143,10 +157,14 @@ public class ReservationIntentExtractor {
         if (ctx.awaiting("DATE") && n.matches("\\d{1,2}")) {
             date = dateResolver.resolve("el " + n);
         }
+        // "24 10" / "24 10 2026" (día mes separados por espacio) cuando el bot acaba de pedir la fecha.
+        if (ctx.awaiting("DATE") && n.matches("\\d{1,2}\\s+\\d{1,2}(?:\\s+\\d{2,4})?")) {
+            date = dateResolver.resolve(n.replaceAll("\\s+", "/"));
+        }
 
         Integer party = partyFrom(n, ctx.awaiting("PARTY_SIZE"));
         ReservationType type = typeFrom(n);
-        String name = nameFrom(raw, n, ctx.awaiting("NAME"));
+        String name = nameFrom(raw, n, ctx.awaiting("NAME"), ctx.awaiting("CONFIRM"));
         String receiptPhone = receiptPhoneFrom(raw, n);
         Long number = reservationNumberFrom(n, ctx.awaiting("RESERVATION"));
         int ordinal = ordinalFrom(n);
@@ -258,21 +276,55 @@ public class ReservationIntentExtractor {
         return vip ? ReservationType.VIP : null;
     }
 
-    private String nameFrom(String raw, String n, boolean awaitingName) {
+    private String nameFrom(String raw, String n, boolean awaitingName, boolean strict) {
         Matcher m = NAME_PATTERN.matcher(raw);
         if (m.find()) {
             String cleaned = cutAtStopWord(m.group(1));
-            if (cleaned != null) return titleCase(cleaned);
+            if (cleaned != null && !isBlockedName(cleaned)) return titleCase(cleaned);
         }
         if (awaitingName) {
             String t = raw.replaceAll("[.,;!¡¿?]+$", "").trim();
             String[] words = t.split("\\s+");
             boolean looksLikeName = !t.isEmpty() && words.length <= 4 && t.length() <= 60
                     && t.matches("(?iu)[\\p{L}]+(?:\\s+[\\p{L}]+){0,3}")
-                    && !isYes(n) && !isNo(n);
+                    && !isYes(n) && !isNo(n) && !isBlockedName(t) && !allStopWords(t);
             if (looksLikeName) return titleCase(t);
         }
+        // En la confirmación el cliente escribe su nombre sin decir "a nombre de": se acepta
+        // solo si es corto y no es una palabra del flujo ("cumpleaños", "reserva", un saludo...).
+        if (strict) {
+            String t = raw.replaceAll("[.,;!¡¿?]+$", "").trim();
+            String[] words = t.split("\\s+");
+            if (!t.isEmpty() && words.length <= 3 && t.length() <= 40
+                    && t.matches("(?iu)[\\p{L}]+(?:\\s+[\\p{L}]+){0,2}")
+                    && !isYes(n) && !isNo(n) && !isBlockedName(t) && !containsStopWord(t)) {
+                return titleCase(t);
+            }
+        }
         return null;
+    }
+
+    private boolean containsStopWord(String candidate) {
+        for (String w : candidate.split("\\s+")) {
+            if (NAME_STOP.contains(TextNormalizer.normalize(w))) return true;
+        }
+        return false;
+    }
+
+    /** "hola", "buenas tardes", "cumpleaños": todo el texto son palabras del flujo, no un nombre. */
+    private boolean allStopWords(String candidate) {
+        String[] words = candidate.split("\\s+");
+        if (words.length == 0) return true;
+        for (String w : words) {
+            if (!NAME_STOP.contains(TextNormalizer.normalize(w))) return false;
+        }
+        return true;
+    }
+
+    private boolean isBlockedName(String candidate) {
+        String n = TextNormalizer.normalize(candidate);
+        if (n.isBlank() || NAME_BLOCK.contains(n)) return true;
+        return n.startsWith("de quien") || n.startsWith("de la reserva") || n.startsWith("nombre ");
     }
 
     private String cutAtStopWord(String captured) {
@@ -369,6 +421,10 @@ public class ReservationIntentExtractor {
 
     /** Completa lo que las reglas locales no entendieron. Ante cualquier fallo devuelve {@code local} intacto. */
     public Extraction enrich(String text, Context ctx, Extraction local) {
+        // Un número suelto ("100", "12") no es un dato inventable: el LLM tiende a convertirlo en
+        // "100 personas" cuando el bot preguntaba la fecha. Sin texto que interpretar, no se llama.
+        String normalized = TextNormalizer.normalize(text == null ? "" : text);
+        if (normalized.matches("[\\d\\s:.,\\-]+")) return local;
         try {
             String system = LLM_SYSTEM + (ctx.awaiting() != null
                     ? "\nContexto: el asistente acaba de preguntarle al cliente por: " + ctx.awaiting() + "." : "");

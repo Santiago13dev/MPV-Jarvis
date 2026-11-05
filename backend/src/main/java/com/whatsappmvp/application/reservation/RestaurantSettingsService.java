@@ -30,7 +30,8 @@ public class RestaurantSettingsService {
     private final ReservationBlockJpaRepository blockRepository;
 
     /** Campos null = sin cambio (PATCH). */
-    public record SettingsUpdate(BigDecimal normalPrice, BigDecimal vipPrice, Integer vipCapacity,
+    public record SettingsUpdate(BigDecimal normalPrice, BigDecimal celebrationPrice,
+                                 BigDecimal extraHonoreePrice, BigDecimal vipPrice, Integer vipCapacity,
                                  Set<DayOfWeek> operatingDays, Boolean openOnHolidayMondays,
                                  LocalTime reservationStartTime, LocalTime reservationEndTime,
                                  Integer slotIntervalMinutes, Integer defaultSlotCapacity, Integer maxPartySize,
@@ -48,6 +49,14 @@ public class RestaurantSettingsService {
         if (u.normalPrice() != null) {
             requireNonNegative(u.normalPrice(), "El precio normal");
             s.setNormalPrice(u.normalPrice());
+        }
+        if (u.celebrationPrice() != null) {
+            requireNonNegative(u.celebrationPrice(), "El paquete de celebración");
+            s.setCelebrationPrice(u.celebrationPrice());
+        }
+        if (u.extraHonoreePrice() != null) {
+            requireNonNegative(u.extraHonoreePrice(), "El valor por homenajeado adicional");
+            s.setExtraHonoreePrice(u.extraHonoreePrice());
         }
         if (u.vipPrice() != null) {
             requireNonNegative(u.vipPrice(), "El precio VIP");
@@ -76,7 +85,7 @@ public class RestaurantSettingsService {
             s.setDefaultSlotCapacity(u.defaultSlotCapacity());
         }
         if (u.maxPartySize() != null) {
-            if (u.maxPartySize() < 1) throw new BusinessException("El tamaño máximo de grupo debe ser mayor a 0");
+            if (u.maxPartySize() < 0) throw new BusinessException("El tamaño máximo de grupo no puede ser negativo (0 = sin límite)");
             s.setMaxPartySize(u.maxPartySize());
         }
         if (u.holdMinutes() != null) {

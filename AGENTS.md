@@ -83,9 +83,32 @@ Transiciones validadas por `canTransitionTo()`; invalidas → excepción.
 - VIP ocupado: si ya hay una reserva VIP activa ese día, no se ofrecen otras franjas; se responde que ya
   está reservado y se ofrece un asesor (`HUMAN_TRANSFER_OFFERED`).
 
+**Encuesta de celebración (V13/V15)**
+- Antes de confirmar el bot pregunta el **motivo** (`awaiting = CELEBRATION`, luego `BIRTHDAY_GENDER` y `HONOREES`).
+  El motivo y los homenajeados se guardan en el borrador y en la reserva.
+- Salida de emergencia: si el cliente responde dos veces algo que no es un motivo (un "hola", una corrección
+  de hora, un "que pena"), se asume **"solo guardar el espacio"** y el flujo continúa. Contador en
+  `reservation_drafts.survey_attempts` (V15); la primera vez se repite la pregunta con un texto más explícito
+  (`ReservationMessages.askCelebrationRetry()`). Sin esto la conversación quedaba atrapada para siempre.
+- Durante la encuesta **no se llama al LLM**: un 429 de Groq inyectaba "estoy teniendo dificultades" justo
+  cuando el cliente estaba respondiendo el motivo.
+- Corrección de datos fuera de la pregunta: si el cliente cambia fecha/hora/personas mientras el bot pregunta
+  otra cosa, la respuesta antepone un aviso ("Listo, actualicé la hora a 1:00 PM.") — antes el cambio se
+  aplicaba en silencio y el resumen salía con otro dato sin explicación.
+
+**Fechas y horas (`DateExpressionResolver` / `TimeExpressionResolver`)**
+- Horas compactas en cualquier contexto: `1230`, `100`, `1-00`, `12.30` (con o sin `a las`), además de `12:30`, `1:00 pm`.
+- `sábado 30` cuando el 30 no cae sábado → **pregunta** ("El 30 de octubre cae viernes, no sábado…") en vez de
+  elegir un día distinto en silencio.
+- Una fecha sin año solo se pasa al año siguiente si quedó **más de 45 días atrás** ("5 de enero" dicho en
+  octubre). Si pasó hace pocos días ("24 oct" dicho el 26) se responde que ya pasó; antes se agendaba sin
+  avisar para dentro de un año.
+- Nombres: se descartan etiquetas de formulario (`nombre de quien reserva`, `de quien`) y palabras del flujo
+  (`hola`, `cumpleaños`, `reserva`). En la confirmación también se acepta un nombre suelto ("Juan Melo").
+
 **Motor de negocio (`ReservationService` — única vía de escritura)**
 - Cupo normal por slot con `pg_advisory_xact_lock`; el VIP además toma un lock por día (concurrencia segura), doble chequeo de idempotencia
-- Precios: NORMAL = valor fijo por reserva ($40.000 por defecto), VIP = valor fijo por espacio ($100.000 por defecto; **un solo espacio VIP por día**, no consume cupo NORMAL)
+- Precios (`ReservationPricing`, única fuente de verdad): NORMAL = base 0 por defecto (**solo guardar el espacio**) + paquete de celebración; VIP = valor fijo por el espacio completo ($100.000 por defecto; **un solo espacio VIP por día**, no consume cupo NORMAL). Paquete de celebración: $40.000 para 1 homenajeado + $10.000 por adicional (`celebration_price` / `extra_honoree_price` en `restaurant_settings`)
 - Crear / modificar (libera slot viejo, recalcula precio) / cancelar (soft, idempotente) / confirmar /
   recibo de pago (aceptar/rechazar) / expirar hold
 - Auditoría (`reservation_audit_log`) + eventos Spring (`ReservationNotificationService`)
@@ -251,7 +274,10 @@ docker logs wamvp_whatsapp --tail 20
   (`~/.docker/run/docker.sock`); en ese caso correr las baterías E2E que usan la BD real.
   Total actual: **56 unit en verde**; 28 de integración compilan y quedan skipped en este entorno.
 - Baterías locales (backend + BD Docker):
-  - `python3 scripts/test_reservation_full.py` → **171/171**
+  - `python3 scripts/test_reservation_full.py` → **181/181** (incluye la encuesta de celebración, la reserva
+    gratis sin celebración y el rescate de la encuesta). El script responde solo la encuesta
+    (`auto_survey()`) porque los guiones son anteriores a V13; la sección VIP la desactiva (`AUTO_CELEBRATION = "no"`)
+    para validar el precio base del espacio.
   - `python3 scripts/test_dashboard_config.py` → **46/46**
   - `python3 scripts/test_ai_cases.py` → **17/17** (requiere `GROQ_API_KEY` en `.env`)
 - Sin CI. Frontend sin setup de tests (no hay target `ng test` ni specs). Sin tests de controllers REST ni del pipeline `MessageProcessingService`.

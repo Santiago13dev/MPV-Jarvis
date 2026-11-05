@@ -191,4 +191,20 @@ class ReservationIntentExtractorTest {
 
         assertThat(extractor.extract("¿Abren el domingo?", FREE).intent()).isEqualTo(Intent.GENERAL_QUESTION);
     }
+
+    @Test
+    void partySizeWithPerSuffixFromTheRealChat() {
+        Extraction x = extractor.extract("15per", new Context("PARTY_SIZE", 11, false));
+        assertThat(x.partySize()).isEqualTo(15);
+    }
+
+    @Test
+    void compactTimeAndDayMonthAnswersFromTheRealChat() {
+        assertThat(extractor.extract("1-00pm", new Context("TIME", 11, false)).time().time())
+                .isEqualTo(LocalTime.of(13, 0));
+        assertThat(extractor.extract("100pm", new Context("TIME", 11, false)).time().time())
+                .isEqualTo(LocalTime.of(13, 0));
+        assertThat(extractor.extract("24 10", new Context("DATE", 11, false)).date().date())
+                .isEqualTo(LocalDate.of(2026, 10, 24));
+    }
 }

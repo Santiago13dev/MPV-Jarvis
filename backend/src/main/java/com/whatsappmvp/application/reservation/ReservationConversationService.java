@@ -9,6 +9,7 @@ import com.whatsappmvp.application.service.ReservationService;
 import com.whatsappmvp.application.service.ReservationService.CreateCommand;
 import com.whatsappmvp.application.service.ReservationService.ModifyCommand;
 import com.whatsappmvp.application.service.ReservationService.Outcome;
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import com.whatsappmvp.domain.exception.BusinessException;
@@ -62,10 +63,13 @@ public class ReservationConversationService {
         NOT_HANDLED
     }
 
-    public record Result(Kind kind, String text) {
-        static Result reply(String t) { return new Result(Kind.REPLY, t); }
-        static Result question(String reminder) { return new Result(Kind.QUESTION_WITH_REMINDER, reminder); }
-        static Result notHandled() { return new Result(Kind.NOT_HANDLED, null); }
+    public record Poll(String name, List<String> options, int selectableCount) {}
+
+    public record Result(Kind kind, String text, Poll poll) {
+        static Result reply(String t) { return new Result(Kind.REPLY, t, null); }
+        static Result reply(String t, Poll p) { return new Result(Kind.REPLY, t, p); }
+        static Result question(String reminder) { return new Result(Kind.QUESTION_WITH_REMINDER, reminder, null); }
+        static Result notHandled() { return new Result(Kind.NOT_HANDLED, null, null); }
     }
 
     static final int DRAFT_TTL_MINUTES = 30;
@@ -79,6 +83,9 @@ public class ReservationConversationService {
     private static final String A_TIME_ANY = "TIME_ANY";
     private static final String A_NAME = "NAME";
     private static final String A_TYPE = "TYPE";
+    private static final String A_CELEBRATION = "CELEBRATION";
+    private static final String A_BIRTHDAY_GENDER = "BIRTHDAY_GENDER";
+    private static final String A_HONOREES = "HONOREES";
     private static final String A_CONFIRM = "CONFIRM";
     private static final String A_RESERVATION = "RESERVATION";
     private static final String A_CHANGES = "CHANGES";
@@ -119,14 +126,38 @@ public class ReservationConversationService {
         Context ctx = new Context(draft != null ? draft.getAwaiting() : null, pivot,
                 draft != null && draft.getMode() == Mode.MODIFY, draft != null);
         Extraction x = extractor.extract(text, ctx);
-        // El LLM solo entra cuando hay un borrador abierto y las reglas locales no entendieron nada
-        if (draft != null && x.isEmpty()) {
+        // El LLM solo entra cuando hay un borrador abierto y las reglas locales no entendieron nada.
+        // En la encuesta de celebración no hace falta: un fallo del proveedor añadía ruido
+        // ("estoy teniendo dificultades") justo cuando el cliente está respondiendo el motivo.
+        boolean surveyStep = draft != null && (A_CELEBRATION.equals(draft.getAwaiting())
+                || A_BIRTHDAY_GENDER.equals(draft.getAwaiting()) || A_HONOREES.equals(draft.getAwaiting()));
+        if (draft != null && x.isEmpty() && !surveyStep) {
             x = extractor.enrich(text, ctx, x);
         }
         log.info("[RESERVATION] turn customer={} intent={} awaiting={} draft={}",
                 mask(phone), x.intent(), ctx.awaiting(), draft != null ? draft.getMode() : "none");
 
         try {
+            // Restricciones del VIP: no mascotas ni personas con movilidad reducida.
+            String normalized = TextNormalizer.normalize(text);
+            boolean vipRestriction = containsAny(normalized, "mascota", "mascotas", "perro", "perra", "gato",
+                    "movilidad reducida", "silla de ruedas", "discapacidad");
+            boolean vipContext = (draft != null && draft.getReservationType() == ReservationType.VIP)
+                    || x.type() == ReservationType.VIP;
+            if (vipRestriction && vipContext) {
+                if (draft == null) {
+                    ReservationDraftEntity d = newDraft(conv, Mode.CREATE);
+                    d.setReservationType(ReservationType.VIP);
+                    // Conserva los datos que el cliente ya dio (personas, fecha, hora, nombre).
+                    applyCreateFields(d, x, null);
+                    applyCelebrationFields(d, text, null);
+                    return ask(d, A_TYPE, msg.vipRestrictionOffer(),
+                            poll("¿Quieres una reserva normal?", List.of("Sí, reserva normal", "No")));
+                }
+                return ask(draft, A_TYPE, msg.vipRestrictionOffer(),
+                        poll("¿Quieres una reserva normal?", List.of("Sí, reserva normal", "No")));
+            }
+
             // "llevar 2 más", "agregar 2 personas", "quitar 2": modificación incremental.
             // Sin esto caía a la IA, que contestaba "puedes agregar..." pero no cambiaba nada.
             if (draft == null) {
@@ -135,7 +166,7 @@ public class ReservationConversationService {
             }
             return draft == null
                     ? start(conv, phone, text, x, waMessageId, s, pivot)
-                    : proceed(draft, conv, phone, x, waMessageId, s);
+                    : proceed(draft, conv, phone, x, waMessageId, s, text);
         } catch (BusinessException e) {
             log.warn("[RESERVATION] business rule rejected customer={}: {}", mask(phone), e.getMessage());
             return Result.reply(e.getMessage());
@@ -201,7 +232,7 @@ public class ReservationConversationService {
                          RestaurantSettingsEntity s, int pivot) {
         return switch (x.intent()) {
             case CREATE_RESERVATION, CHECK_AVAILABILITY ->
-                    advanceCreate(newDraft(conv, Mode.CREATE), x, conv, phone, waId, s);
+                    advanceCreate(newDraft(conv, Mode.CREATE), x, conv, phone, waId, s, text);
             case MODIFY_RESERVATION -> {
                 // En modificaciones "del sábado... al domingo" se re-interpreta tomando el destino
                 Extraction xm = extractor.extract(text, new Context(null, pivot, true));
@@ -243,7 +274,7 @@ public class ReservationConversationService {
                     if (x.partySize() == null && !x.date().isResolved() && !x.time().hasTime()) {
                         yield ask(d, A_PARTY, msg.vipInfo());
                     }
-                    Result next = advanceCreate(d, x, conv, phone, waId, s);
+                    Result next = advanceCreate(d, x, conv, phone, waId, s, text);
                     yield Result.reply(msg.vipInfo() + "\n\n" + next.text());
                 }
                 yield Result.notHandled();
@@ -257,7 +288,7 @@ public class ReservationConversationService {
     // ══════════════════════════════════════════════════════════════════════
 
     private Result proceed(ReservationDraftEntity d, ConversationEntity conv, String phone, Extraction x,
-                           String waId, RestaurantSettingsEntity s) {
+                           String waId, RestaurantSettingsEntity s, String text) {
         // Cambio de tema: gestionar una reserva existente mientras se armaba una nueva
         if (d.getMode() == Mode.CREATE
                 && (x.intent() == Intent.CANCEL_RESERVATION || x.intent() == Intent.MODIFY_RESERVATION)) {
@@ -271,13 +302,18 @@ public class ReservationConversationService {
         }
 
         // Otra pregunta (o texto que nadie entendió): se responde y se conserva el borrador
-        if (x.isEmpty()) {
+        boolean awaitingSurvey = A_CELEBRATION.equals(d.getAwaiting())
+                || A_BIRTHDAY_GENDER.equals(d.getAwaiting()) || A_HONOREES.equals(d.getAwaiting());
+        if (x.isEmpty() && !awaitingSurvey) {
+            return Result.question(reminder(d));
+        }
+        if (awaitingSurvey && text != null && text.contains("?")) {
             return Result.question(reminder(d));
         }
 
         // Pregunta que menciona datos ("¿abren el domingo?", "¿cuánto cuesta para 5 personas?"): es una consulta,
         // no una respuesta a lo que el bot preguntó. Se responde con FAQ/IA SIN tocar el borrador.
-        boolean pureQuestion = x.intent() == Intent.GENERAL_QUESTION
+        boolean pureQuestion = !awaitingSurvey && x.intent() == Intent.GENERAL_QUESTION
                 && !x.yes() && !x.no() && !x.discard()
                 && x.ordinal() == 0 && x.reservationNumber() == null
                 && !answersAwaited(d, x);
@@ -285,11 +321,38 @@ public class ReservationConversationService {
             return Result.question(reminder(d));
         }
 
-        return switch (d.getMode()) {
-            case CREATE -> advanceCreate(d, x, conv, phone, waId, s);
+        String awaitingBefore = d.getAwaiting();
+        LocalTime timeBefore = d.getSlotTime();
+        LocalDate dateBefore = d.getSlotDate();
+        Integer partyBefore = d.getPartySize();
+
+        Result result = switch (d.getMode()) {
+            case CREATE -> advanceCreate(d, x, conv, phone, waId, s, text);
             case MODIFY -> continueModify(d, x, conv, phone, s);
             case CANCEL -> continueCancel(d, x, phone);
         };
+
+        // El cliente corrigió un dato mientras el bot preguntaba otra cosa: se lo confirmamos.
+        // Antes el cambio se aplicaba en silencio (pidió "mejor a la 1" y el resumen salía a la 1
+        // sin que el bot lo hubiera dicho nunca).
+        return withNote(changedNote(d, awaitingBefore, timeBefore, dateBefore, partyBefore), result);
+    }
+
+    /** Aviso del dato que el cliente cambió fuera de la pregunta que el bot le hizo. */
+    private String changedNote(ReservationDraftEntity d, String prev, LocalTime timeBefore,
+                               LocalDate dateBefore, Integer partyBefore) {
+        if (d.getMode() != Mode.CREATE || prev == null) return null;
+        if (d.getSlotTime() != null && !d.getSlotTime().equals(timeBefore)
+                && !A_TIME.equals(prev) && !A_TIME_ANY.equals(prev)) {
+            return "Listo, actualicé la hora a " + msg.time(d.getSlotTime()) + ".";
+        }
+        if (d.getSlotDate() != null && !d.getSlotDate().equals(dateBefore) && !A_DATE.equals(prev)) {
+            return "Listo, actualicé la fecha al " + msg.date(d.getSlotDate()) + ".";
+        }
+        if (d.getPartySize() != null && !d.getPartySize().equals(partyBefore) && !A_PARTY.equals(prev)) {
+            return "Listo, actualicé las personas a " + d.getPartySize() + ".";
+        }
+        return null;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -297,14 +360,46 @@ public class ReservationConversationService {
     // ══════════════════════════════════════════════════════════════════════
 
     private Result advanceCreate(ReservationDraftEntity d, Extraction x, ConversationEntity conv, String phone,
-                                 String waId, RestaurantSettingsEntity s) {
+                                 String waId, RestaurantSettingsEntity s, String text) {
         String prev = d.getAwaiting();
+
+        // Encuestas con opción "Más de N": se pide el número exacto por texto.
+        String nText = TextNormalizer.normalize(text);
+        if (A_PARTY.equals(prev) && nText.contains("mas de")) {
+            d.setPartySize(null);
+            return ask(d, A_PARTY, "¿Cuántas personas exactamente? Escribe solo el número.");
+        }
+        if (A_HONOREES.equals(prev) && nText.contains("mas de")) {
+            d.setHonorees(null);
+            return ask(d, A_HONOREES, "¿Cuántos homenajeados exactamente? Escribe solo el número.");
+        }
 
         // Respuestas cortas según lo último que se preguntó
         if (A_TYPE.equals(prev) && x.yes() && d.getReservationType() == ReservationType.VIP) {
             d.setReservationType(ReservationType.NORMAL);
         }
-        boolean changed = applyCreateFields(d, x);
+        boolean changed = applyCreateFields(d, x, prev);
+        changed |= applyCelebrationFields(d, text, prev);
+
+        // Encuesta de celebración: se da una segunda oportunidad y luego se cierra sola.
+        // Antes, cualquier mensaje que no fuera un motivo (un "hola", una corrección de hora)
+        // devolvía la misma pregunta para siempre y el cliente quedaba atrapado.
+        String pre = null;
+        if (A_CELEBRATION.equals(prev) && d.getCelebrationType() == null) {
+            int attempts = d.getSurveyAttempts() == null ? 0 : d.getSurveyAttempts();
+            if (attempts + 1 >= 2) {
+                d.setCelebrationType(CelebrationType.NONE);
+                d.setHonorees(0);
+                d.setSurveyAttempts(0);
+                pre = msg.surveySkipped();
+            } else {
+                d.setSurveyAttempts(attempts + 1);
+                return ask(d, A_CELEBRATION, msg.askCelebrationRetry());
+            }
+        } else if (d.getCelebrationType() != null && d.getSurveyAttempts() != null
+                && d.getSurveyAttempts() > 0) {
+            d.setSurveyAttempts(0);
+        }
         if (A_TIME.equals(prev) && !x.time().hasTime()) {
             LocalTime picked = pickOffered(d, x);
             if (picked != null) {
@@ -314,17 +409,21 @@ public class ReservationConversationService {
             }
         }
 
-        // Abandonar / negar
-        if (x.discard() || (x.no() && !A_TIME.equals(prev) && !A_TIME_ANY.equals(prev) && !A_DATE.equals(prev))) {
+        // Abandonar / negar. "no" respondiendo a la encuesta de celebración significa "ninguna".
+        boolean surveyAnswer = A_CELEBRATION.equals(prev) || A_BIRTHDAY_GENDER.equals(prev)
+                || A_HONOREES.equals(prev);
+        if (x.discard() || (x.no() && !surveyAnswer && !A_TIME.equals(prev)
+                && !A_TIME_ANY.equals(prev) && !A_DATE.equals(prev))) {
             return discardCreate(d);
         }
-        if (x.no()) {
+        if (x.no() && !surveyAnswer) {
             return ask(d, prev, "Entendido. Dime qué día u horario te funciona mejor, "
                     + "o escribe *cancelar* si prefieres dejarlo así.");
         }
 
         if (x.date().status() == DateExpressionResolver.Status.AMBIGUOUS) {
-            return ask(d, A_DATE, msg.askDateAmbiguous(x.date().note()));
+            ReservationType t = d.getReservationType() != null ? d.getReservationType() : ReservationType.NORMAL;
+            return ask(d, A_DATE, msg.askDateAmbiguous(x.date().note(), t));
         }
 
         // Personas inválidas o grupo demasiado grande: se resuelve ANTES de seguir preguntando
@@ -333,19 +432,27 @@ public class ReservationConversationService {
             d.setPartySize(null);
             return ask(d, A_PARTY, msg.partyInvalid());
         }
-        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : Integer.MAX_VALUE;
-        if (d.getPartySize() != null && d.getPartySize() > maxParty) {
+        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : 0;
+        if (maxParty > 0 && d.getPartySize() != null && d.getPartySize() > maxParty) {
             return handToHuman(d, conv, msg.partyTooLarge(maxParty));
         }
 
         // ¿Qué falta? Solo se pregunta lo que no se sabe
         boolean nothingYet = d.getPartySize() == null && d.getSlotDate() == null && d.getSlotTime() == null
                 && d.getReservationType() == null && d.getCustomerName() == null;
-        if (nothingYet) return ask(d, A_PARTY, msg.askEverything());
-        if (d.getPartySize() == null) return ask(d, A_PARTY, msg.askPartySize());
-        if (d.getSlotDate() == null) return ask(d, A_DATE, msg.askDate(d.getPartySize()));
-
+        if (nothingYet) {
+            return ask(d, A_PARTY, msg.askEverything(), poll("¿Para cuántas personas?", partyOptions()));
+        }
         ReservationType type = d.getReservationType() != null ? d.getReservationType() : ReservationType.NORMAL;
+        if (d.getPartySize() == null) {
+            return ask(d, A_PARTY, msg.askPartySize(type), poll("¿Para cuántas personas?", partyOptions()));
+        }
+        if (d.getSlotDate() == null) {
+            List<String> dates = dateOptions(type);
+            return dates.size() >= 2
+                    ? ask(d, A_DATE, msg.askDate(d.getPartySize(), type), poll("¿Para qué día?", dates))
+                    : ask(d, A_DATE, msg.askDate(d.getPartySize(), type));
+        }
 
         // Problemas a nivel de día / grupo (día cerrado, bloqueado, grupo demasiado grande...)
         Result dayIssue = dayProblem(d, conv, type, s);
@@ -357,8 +464,9 @@ public class ReservationConversationService {
             return offerSlots(d, type, s, period);
         }
 
-        // Verificación definitiva contra el backend
-        RequestCheck c = availability.check(d.getSlotDate(), d.getSlotTime(), type, d.getPartySize(), null);
+        // Verificación definitiva contra el backend (incluye celebración y homenajeados)
+        RequestCheck c = availability.check(d.getSlotDate(), d.getSlotTime(), type, d.getPartySize(), null,
+                d.getCelebrationType(), d.getHonorees());
         if (!c.available()) {
             d.setSlotTime(null);
             if (c.alternatives().isEmpty()) {
@@ -370,8 +478,25 @@ public class ReservationConversationService {
             return ask(d, A_TIME, msg.reasonText(c));
         }
 
+        // Encuesta de celebración (motivo y homenajeados) antes de pedir el nombre.
+        if (d.getCelebrationType() == null) {
+            return ask(d, A_CELEBRATION, msg.askCelebration(),
+                    poll("¿Cuál es el motivo?", celebrationOptions()));
+        }
+        if (d.getCelebrationType() == CelebrationType.BIRTHDAY) {
+            return ask(d, A_BIRTHDAY_GENDER, msg.askBirthdayGender(),
+                    poll("¿El cumpleaños es de...?", List.of("Hombre", "Mujer")));
+        }
+        if (d.getCelebrationType().isCelebration() && d.getHonorees() == null) {
+            return ask(d, A_HONOREES, msg.askHonorees(),
+                    poll("¿Cuántos homenajeados?", honoreeOptions()));
+        }
+        if (d.getCelebrationType() == CelebrationType.NONE && d.getHonorees() == null) {
+            d.setHonorees(0);
+        }
+
         if (d.getCustomerName() == null || d.getCustomerName().isBlank()) {
-            return ask(d, A_NAME, msg.askName());
+            return withNote(pre, ask(d, A_NAME, msg.askName()));
         }
 
         boolean confirm = A_CONFIRM.equals(prev) && x.yes() && !changed;
@@ -379,17 +504,126 @@ public class ReservationConversationService {
             return createReservation(d, conv, phone, waId, type);
         }
         d.setOfferedTimes(null);
-        return ask(d, A_CONFIRM, msg.confirmPrompt(type, d.getSlotDate(), d.getSlotTime(),
-                d.getPartySize(), c.price(), d.getCustomerName()));
+        return withNote(pre, ask(d, A_CONFIRM,
+                msg.confirmPrompt(type, d.getSlotDate(), d.getSlotTime(), d.getPartySize(), c.price(),
+                        d.getCustomerName(), d.getCelebrationType(), d.getHonorees()),
+                poll("¿Confirmas la reserva?", List.of("Sí", "No"))));
     }
 
-    private boolean applyCreateFields(ReservationDraftEntity d, Extraction x) {
+    /** Antepone un aviso al texto de la respuesta conservando la encuesta (poll). */
+    private Result withNote(String note, Result r) {
+        if (note == null || note.isBlank() || r.text() == null) return r;
+        return new Result(r.kind(), note + "\n\n" + r.text(), r.poll());
+    }
+
+    /** Interpreta el motivo de celebración y los homenajeados desde el texto libre. */
+    private boolean applyCelebrationFields(ReservationDraftEntity d, String text, String prev) {
+        boolean changed = false;
+        String n = TextNormalizer.normalize(text);
+
+        CelebrationType parsed = parseCelebration(n);
+        if (parsed != null) {
+            // "solo guardar el espacio" es explícito y vale desde el primer mensaje.
+            // "no"/"ninguna" solo significa NONE cuando el bot acaba de preguntar el motivo.
+            boolean explicitNone = parsed == CelebrationType.NONE
+                    && containsAny(n, "solo guardar", "solo apartar", "sin celebracion", "sin celebración",
+                    "solo la mesa", "solo reserva");
+            if (explicitNone || parsed != CelebrationType.NONE
+                    || A_CELEBRATION.equals(prev) || A_BIRTHDAY_GENDER.equals(prev)) {
+                if (d.getCelebrationType() != parsed) {
+                    d.setCelebrationType(parsed);
+                    changed = true;
+                }
+            }
+        } else if (A_CELEBRATION.equals(prev) && isNo(n)) {
+            d.setCelebrationType(CelebrationType.NONE);
+            d.setHonorees(0);
+            changed = true;
+        }
+
+        // Cumpleaños sin género: si en el mismo mensaje dice hombre/mujer, se afina.
+        if (d.getCelebrationType() == CelebrationType.BIRTHDAY) {
+            if (containsAny(n, "hombre", "masculino", "nino", "niño", "varon", "varón")) {
+                d.setCelebrationType(CelebrationType.BIRTHDAY_MALE);
+                changed = true;
+            } else if (containsAny(n, "mujer", "femenino", "nina", "niña")) {
+                d.setCelebrationType(CelebrationType.BIRTHDAY_FEMALE);
+                changed = true;
+            }
+        }
+
+        if (A_HONOREES.equals(prev) || (d.getCelebrationType() != null
+                && d.getCelebrationType().isCelebration() && containsAny(n, "homenajeado", "homenajeados"))) {
+            Integer honorees = parseHonorees(n);
+            if (honorees != null && !honorees.equals(d.getHonorees())) {
+                d.setHonorees(honorees);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private CelebrationType parseCelebration(String n) {
+        if (containsAny(n, "primera comunion", "primera comunión", "comunion", "comunión")) {
+            return CelebrationType.FIRST_COMMUNION;
+        }
+        if (containsAny(n, "aniversario", "aniversarios")) return CelebrationType.ANNIVERSARY;
+        if (containsAny(n, "grado", "grados", "graduacion", "graduación")) return CelebrationType.GRADUATION;
+        if (containsAny(n, "cumple", "cumpleanos", "cumpleaños", "birthday")) {
+            if (containsAny(n, "hombre", "masculino", "nino", "niño", "varon", "varón")) {
+                return CelebrationType.BIRTHDAY_MALE;
+            }
+            if (containsAny(n, "mujer", "femenino", "nina", "niña")) {
+                return CelebrationType.BIRTHDAY_FEMALE;
+            }
+            return CelebrationType.BIRTHDAY;
+        }
+        if (containsAny(n, "solo guardar", "solo apartar", "sin celebracion", "sin celebración",
+                "ninguna", "ninguno", "no gracias", "solo la mesa", "solo reserva")) {
+            return CelebrationType.NONE;
+        }
+        return null;
+    }
+
+    private Integer parseHonorees(String n) {
+        if (containsAny(n, "solo uno", "solo una", "un homenajeado", "una homenajeada", "1 homenajeado")) {
+            return 1;
+        }
+        Matcher m = Pattern.compile("(\\d{1,2})").matcher(n);
+        if (m.find()) {
+            try {
+                int v = Integer.parseInt(m.group(1));
+                if (v >= 1 && v <= 100) return v;
+            } catch (NumberFormatException ignored) {
+                // sigue
+            }
+        }
+        if (containsAny(n, "dos")) return 2;
+        if (containsAny(n, "tres")) return 3;
+        if (containsAny(n, "cuatro")) return 4;
+        if (containsAny(n, "cinco")) return 5;
+        return null;
+    }
+
+    private boolean containsAny(String n, String... words) {
+        for (String w : words) if (n.contains(w)) return true;
+        return false;
+    }
+
+    private boolean isNo(String n) {
+        return n.matches(".*\\b(no|nop|nel|ninguna|ninguno)\\b.*");
+    }
+
+    private boolean applyCreateFields(ReservationDraftEntity d, Extraction x, String prev) {
         boolean changed = false;
         if (x.type() != null && x.type() != d.getReservationType()) {
             d.setReservationType(x.type());
             changed = true;
         }
-        if (x.partySize() != null && !x.partySize().equals(d.getPartySize())) {
+        // "1 homenajeado" o "2 personas" respondiendo a la encuesta de celebración NO son el tamaño del grupo.
+        boolean surveyAnswer = A_CELEBRATION.equals(prev) || A_BIRTHDAY_GENDER.equals(prev)
+                || A_HONOREES.equals(prev);
+        if (!surveyAnswer && x.partySize() != null && !x.partySize().equals(d.getPartySize())) {
             d.setPartySize(x.partySize());
             changed = true;
         }
@@ -421,7 +655,8 @@ public class ReservationConversationService {
     private Result dayProblem(ReservationDraftEntity d, ConversationEntity conv, ReservationType type,
                               RestaurantSettingsEntity s) {
         LocalDate date = d.getSlotDate();
-        RequestCheck c = availability.check(date, s.getReservationStartTime(), type, d.getPartySize(), null);
+        RequestCheck c = availability.check(date, s.getReservationStartTime(), type, d.getPartySize(), null,
+                d.getCelebrationType(), d.getHonorees());
         Reason reason = c.reason();
         if (c.available()) return null;
 
@@ -432,7 +667,7 @@ public class ReservationConversationService {
             return ask(d, A_DATE, msg.reasonText(c));
         }
         if (reason == Reason.BLOCKED && calendar.isDateBlocked(date)) {
-            List<LocalDate> next = calendar.nextBookableDays(date.plusDays(1), 2, s);
+            List<LocalDate> next = calendar.nextBookableDays(date.plusDays(1), 2, s, type);
             d.setSlotDate(null);
             d.setSlotTime(null);
             d.setOfferedTimes(null);
@@ -452,7 +687,8 @@ public class ReservationConversationService {
             return handToHuman(d, conv, msg.vipTakenForDay(date));
         }
         if (reason == Reason.VIP_CAPACITY_EXCEEDED) {
-            return ask(d, A_TYPE, msg.reasonText(c));
+            return ask(d, A_TYPE, msg.reasonText(c),
+                    poll("¿Prefieres una reserva normal?", List.of("Sí, reserva normal", "No")));
         }
         return null; // problemas de franja: se resuelven con la hora
     }
@@ -463,7 +699,7 @@ public class ReservationConversationService {
         int party = d.getPartySize();
         List<LocalTime> all = availability.findAvailableSlots(date, type, party, null);
         if (all.isEmpty()) {
-            List<LocalDate> next = calendar.nextBookableDays(date.plusDays(1), 2, s);
+            List<LocalDate> next = calendar.nextBookableDays(date.plusDays(1), 2, s, type);
             d.setSlotDate(null);
             d.setOfferedTimes(null);
             return ask(d, A_DATE, msg.noSlotsThatDay(date, next));
@@ -475,7 +711,11 @@ public class ReservationConversationService {
         }
         List<LocalTime> shown = limit(slots);
         d.setOfferedTimes(csv(shown));
-        return ask(d, A_TIME, msg.offerSlots(date, party, type, shown));
+        List<String> options = shown.stream().map(msg::time).toList();
+        String text = msg.offerSlots(date, party, type, shown);
+        return options.size() >= 2
+                ? ask(d, A_TIME, text, poll("¿A qué hora?", options))
+                : ask(d, A_TIME, text);
     }
 
     private Result createReservation(ReservationDraftEntity d, ConversationEntity conv, String phone,
@@ -483,8 +723,8 @@ public class ReservationConversationService {
         String key = waId != null && !waId.isBlank() ? "wa:" + waId : "draft:" + d.getId() + ":" + d.getUpdatedAt();
         Outcome o = reservationService.create(new CreateCommand(
                 d.getCustomerName(), phone, d.getReceiptPhone(), type, d.getSlotDate(), d.getSlotTime(),
-                d.getPartySize(), null, conv.getId(), key, ReservationStatus.PAYMENT_PENDING,
-                Actor.customer(phone)));
+                d.getPartySize(), null, conv.getId(), key, d.getCelebrationType(), d.getHonorees(),
+                null, Actor.customer(phone)));
 
         if (o.ok() || o.duplicate()) {
             deleteDraft(d);
@@ -559,7 +799,8 @@ public class ReservationConversationService {
         int current = target.getPartySize() != null ? target.getPartySize() : 1;
         int next = current + delta;
         if (next < 1) return Result.reply(msg.partyInvalid());
-        if (next > s.getMaxPartySize()) return Result.reply(msg.partyTooLarge(s.getMaxPartySize()));
+        int maxParty = s.getMaxPartySize() != null ? s.getMaxPartySize() : 0;
+        if (maxParty > 0 && next > maxParty) return Result.reply(msg.partyTooLarge(maxParty));
 
         ReservationDraftEntity d = newDraft(conv, Mode.MODIFY);
         d.setTargetReservationId(target.getId());
@@ -677,7 +918,8 @@ public class ReservationConversationService {
         }
 
         // La propia reserva se excluye: sus cupos actuales cuentan como libres para el cambio
-        RequestCheck c = availability.check(nd, nt, ntype, np, target.getId());
+        RequestCheck c = availability.check(nd, nt, ntype, np, target.getId(),
+                target.getCelebrationType(), target.getHonorees());
         if (!c.available()) {
             if (c.reason() == Reason.VIP_TAKEN) {
                 return handToHuman(d, conv, msg.vipTakenForDay(nd));
@@ -690,13 +932,14 @@ public class ReservationConversationService {
             return ask(d, A_CHANGES, msg.reasonText(c));
         }
         d.setOfferedTimes(null);
-        return ask(d, A_CONFIRM, msg.modifyPrompt(target, nd, nt, np, ntype, nname, c.price()));
+        return ask(d, A_CONFIRM, msg.modifyPrompt(target, nd, nt, np, ntype, nname, c.price(),
+                target.getCelebrationType(), target.getHonorees()));
     }
 
     private Result executeModify(ReservationDraftEntity d, ConversationEntity conv, String phone) {
         Outcome o = reservationService.modify(d.getTargetReservationId(), new ModifyCommand(
                 d.getSlotDate(), d.getSlotTime(), d.getPartySize(), d.getReservationType(),
-                d.getCustomerName(), null, phone, Actor.customer(phone)));
+                d.getCustomerName(), null, null, null, phone, Actor.customer(phone)));
         if (o.unchanged()) {
             deleteDraft(d);
             return Result.reply("Tu reserva ya estaba con esos datos, no hice cambios.");
@@ -793,6 +1036,47 @@ public class ReservationConversationService {
         return Result.reply(text);
     }
 
+    /** Igual que {@link #ask}, pero además envía una encuesta (poll) de WhatsApp con opciones. */
+    private Result ask(ReservationDraftEntity d, String awaiting, String text, Poll poll) {
+        d.setAwaiting(awaiting);
+        d.setUpdatedAt(calendar.nowDateTime());
+        drafts.save(d);
+        return Result.reply(text, poll);
+    }
+
+    private Poll poll(String name, List<String> options) {
+        return new Poll(name, options, 1);
+    }
+
+    private List<String> partyOptions() {
+        List<String> options = new ArrayList<>();
+        for (int i = 1; i <= 11; i++) options.add(i + (i == 1 ? " persona" : " personas"));
+        options.add("Más de 11");
+        return options;
+    }
+
+    private List<String> celebrationOptions() {
+        return List.of(
+                "Cumpleaños hombre",
+                "Cumpleaños mujer",
+                "Aniversario",
+                "Grado",
+                "Primera comunión",
+                "Solo guardar el espacio");
+    }
+
+    private List<String> dateOptions(ReservationType type) {
+        return calendar.nextBookableDays(calendar.today(), 6, settingsService.get(), type)
+                .stream().map(msg::dateCap).toList();
+    }
+
+    private List<String> honoreeOptions() {
+        List<String> options = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) options.add(i + (i == 1 ? " homenajeado" : " homenajeados"));
+        options.add("Más de 6");
+        return options;
+    }
+
     private void deleteDraft(ReservationDraftEntity d) {
         drafts.delete(d);
         drafts.flush(); // el DELETE debe ejecutarse antes de un posible INSERT de otro borrador (unique conversation_id)
@@ -807,6 +1091,7 @@ public class ReservationConversationService {
             case A_TIME, A_TIME_ANY -> x.time().hasTime() || x.time().hasPeriod();
             case A_NAME -> x.customerName() != null;
             case A_TYPE -> x.type() != null;
+            case A_CELEBRATION, A_BIRTHDAY_GENDER, A_HONOREES -> true;
             case A_RESERVATION -> x.reservationNumber() != null || x.ordinal() != 0;
             case A_CHANGES -> x.hasBookingData();
             default -> false;
@@ -832,6 +1117,10 @@ public class ReservationConversationService {
                     ? "¿A qué hora del " + msg.date(d.getSlotDate()) + " te gustaría?" : "¿A qué hora te gustaría?";
             case A_NAME -> "¿A nombre de quién dejo la reserva?";
             case A_TYPE -> "¿Prefieres una reserva normal?";
+            case A_CELEBRATION -> "¿Cuál es el motivo? Cumpleaños, aniversario, grado, primera comunión "
+                    + "o solo guardar el espacio.";
+            case A_BIRTHDAY_GENDER -> "¿El cumpleaños es de hombre o de mujer?";
+            case A_HONOREES -> "¿Cuántos homenajeados son?";
             case A_RESERVATION -> "¿Cuál reserva? Dime el número (por ejemplo #1001).";
             case A_CHANGES -> "¿Qué quieres cambiar: la fecha, la hora o el número de personas?";
             case A_CONFIRM -> d.getMode() == Mode.CREATE && d.getSlotDate() != null && d.getSlotTime() != null

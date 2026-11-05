@@ -2,6 +2,7 @@ package com.whatsappmvp.application.reservation;
 
 import com.whatsappmvp.application.reservation.AvailabilityModels.PriceQuote;
 import com.whatsappmvp.application.reservation.AvailabilityModels.RequestCheck;
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import com.whatsappmvp.infrastructure.persistence.entity.ReservationEntity;
@@ -16,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -93,6 +95,32 @@ public class ReservationMessages {
         return join(days);
     }
 
+    /** Días que aplican a cada tipo: normal solo sábados/festivos; VIP también domingos. */
+    public String operatingDaysText(ReservationType type) {
+        RestaurantSettingsEntity s = settingsService.get();
+        List<String> days = new ArrayList<>();
+        if (type == ReservationType.NORMAL) {
+            days.add("sábados");
+        } else {
+            days.add("sábados");
+            days.add("domingos");
+        }
+        if (Boolean.TRUE.equals(s.getOpenOnHolidayMondays())) days.add("lunes festivos");
+        return join(days);
+    }
+
+    public String celebrationLabel(CelebrationType c) {
+        if (c == null || c == CelebrationType.NONE) return "Solo guardar el espacio";
+        return switch (c) {
+            case BIRTHDAY, BIRTHDAY_MALE -> "Cumpleaños (hombre)";
+            case BIRTHDAY_FEMALE -> "Cumpleaños (mujer)";
+            case ANNIVERSARY -> "Aniversario";
+            case GRADUATION -> "Grado";
+            case FIRST_COMMUNION -> "Primera comunión";
+            case NONE -> "Solo guardar el espacio";
+        };
+    }
+
     private String pluralDay(DayOfWeek d) {
         return switch (d) {
             case MONDAY -> "lunes";
@@ -119,8 +147,11 @@ public class ReservationMessages {
     // ── Preguntas por datos faltantes ─────────────────────────────────────
 
     public String askEverything() {
-        return "¡Claro! Con gusto te ayudo con tu reserva 😊 Cuéntame para cuántas personas y para qué día "
-                + "(" + operatingDaysText() + "). Si prefieres nuestro espacio VIP privado, también puedo reservarlo.";
+        return "¡Claro! Con gusto te ayudo con tu reserva 😊 Cuéntame para cuántas personas y para qué día.\n\n"
+                + "• Reserva normal: " + operatingDaysText(ReservationType.NORMAL) + "\n"
+                + "• Espacio VIP privado: " + operatingDaysText(ReservationType.VIP) + "\n\n"
+                + "También te preguntaré el motivo de la celebración (cumpleaños, aniversario, grado o primera comunión) "
+                + "y si es solo para guardar el espacio.";
     }
 
     /** Respuesta a "¿tienen VIP?" / "¿cómo es el espacio privado?". */
@@ -130,30 +161,107 @@ public class ReservationMessages {
                 + "• Capacidad: hasta " + s.getVipCapacity() + " personas\n"
                 + "• Valor: " + money(s.getVipPrice()) + " por el espacio completo (no por persona)\n"
                 + "• Solo hay un espacio VIP por día\n"
-                + "• Disponible " + operatingDaysText() + ", en los horarios de reserva\n\n"
+                + "• Disponible " + operatingDaysText(ReservationType.VIP) + ", en los horarios de reserva\n"
+                + "• No permite mascotas ni personas con movilidad reducida\n\n"
                 + "¿Quieres reservarlo? Dime para cuántas personas y qué día te gustaría.";
+    }
+
+    public String vipRestrictionOffer() {
+        return "Para el espacio VIP no manejamos mascotas ni personas con movilidad reducida. "
+                + "¿Quieres que te reserve una mesa normal en sábado o lunes festivo?";
     }
 
     public String askPartySize() {
         return "Perfecto. ¿Para cuántas personas sería?";
     }
 
+    public String askPartySize(ReservationType type) {
+        if (type == ReservationType.VIP) {
+            return "Perfecto. ¿Para cuántas personas sería? El espacio VIP es para máximo "
+                    + settingsService.get().getVipCapacity() + " personas.";
+        }
+        return "Perfecto. ¿Para cuántas personas sería?";
+    }
+
     public String askDate(Integer partySize) {
-        return "Claro. ¿Para qué día te gustaría? Atendemos " + operatingDaysText() + ".";
+        return askDate(partySize, ReservationType.NORMAL);
+    }
+
+    public String askDate(Integer partySize, ReservationType type) {
+        return "Claro. ¿Para qué día te gustaría? Atendemos " + operatingDaysText(type) + ".";
     }
 
     public String askDateAmbiguous(String note) {
+        return askDateAmbiguous(note, ReservationType.NORMAL);
+    }
+
+    public String askDateAmbiguous(String note, ReservationType type) {
+        if (note != null && note.startsWith("WEEKDAY|")) {
+            return askWeekdayMismatch(note);
+        }
         return "WEEKEND".equals(note)
-                ? "¿Prefieres el sábado o el domingo? Atendemos " + operatingDaysText() + "."
+                ? "¿Prefieres el sábado o el domingo? Atendemos " + operatingDaysText(type) + "."
                 : "Me mencionaste varias fechas. ¿Para cuál día quieres la reserva?";
     }
 
-    public String askTime(LocalDate date) {
-        return "Perfecto. ¿A qué hora del " + date(date) + " te gustaría reservar?";
+    /** "sábado 30" cuando el 30 cae viernes: se pregunta en vez de elegir por el cliente. */
+    public String askWeekdayMismatch(String note) {
+        String[] parts = note.split("\\|");
+        LocalDate numeric = LocalDate.parse(parts[1]);
+        LocalDate weekday = LocalDate.parse(parts[2]);
+        return "El " + dayAndMonth(numeric) + " cae " + dayName(numeric) + ", no " + dayName(weekday) + ". "
+                + "¿Quieres el " + date(numeric) + " o el " + date(weekday) + "?";
+    }
+
+    private String dayAndMonth(LocalDate d) {
+        return d.format(DateTimeFormatter.ofPattern("d 'de' MMMM", ES));
+    }
+
+    private String dayName(LocalDate d) {
+        return d.getDayOfWeek().getDisplayName(TextStyle.FULL, ES);
+    }
+
+    public String askCelebration() {
+        return "¿Cuál es el motivo de la reserva? 🎉\n\n"
+                + "• Cumpleaños (hombre o mujer)\n"
+                + "• Aniversario\n"
+                + "• Grado\n"
+                + "• Primera comunión\n"
+                + "• Solo guardar el espacio (sin postre ni decoración)\n\n"
+                + "Si es cumpleaños, dime también si es hombre o mujer.";
+    }
+
+    /** Segunda oportunidad: se repite la pregunta con una salida explícita. */
+    public String askCelebrationRetry() {
+        return "No entendí el motivo 🤔 Dime una de estas opciones:\n\n"
+                + "• Cumpleaños hombre / Cumpleaños mujer\n"
+                + "• Aniversario\n"
+                + "• Grado\n"
+                + "• Primera comunión\n\n"
+                + "Si no vas a celebrar nada, responde *no* y seguimos con tu reserva sin costo.";
+    }
+
+    /** Aviso cuando la encuesta se cierra sola para no dejar la conversación atrapada. */
+    public String surveySkipped() {
+        return "No alcancé a entender el motivo, así que dejo tu reserva sin celebración "
+                + "(solo guardar el espacio, sin costo). Si querías celebrar algo, dímelo ahora.";
+    }
+
+    public String askBirthdayGender() {
+        return "¿El cumpleaños es de hombre o de mujer? 🎂";
+    }
+
+    public String askHonorees() {
+        return "¿Cuántos homenajeados son? El paquete incluye postre y decoración para 1 persona; "
+                + "cada homenajeado adicional suma " + money(settingsService.get().getExtraHonoreePrice()) + ".";
     }
 
     public String askName() {
         return "¿A nombre de quién dejo la reserva?";
+    }
+
+    public String askTime(LocalDate date) {
+        return "Perfecto. ¿A qué hora del " + date(date) + " te gustaría reservar?";
     }
 
     public String offerSlots(LocalDate date, int partySize, ReservationType type, List<LocalTime> slots) {
@@ -177,13 +285,32 @@ public class ReservationMessages {
 
     public String summaryBlock(ReservationType type, LocalDate date, LocalTime time, int partySize,
                                PriceQuote price, String customerName) {
+        return summaryBlock(type, date, time, partySize, price, customerName, null, null);
+    }
+
+    public String summaryBlock(ReservationType type, LocalDate date, LocalTime time, int partySize,
+                               PriceQuote price, String customerName,
+                               CelebrationType celebration, Integer honorees) {
         StringBuilder sb = new StringBuilder();
         sb.append("📅 ").append(dateCap(date)).append("\n");
         sb.append("🕐 ").append(time(time)).append("\n");
         sb.append("👥 ").append(partySize).append(partySize == 1 ? " persona" : " personas").append("\n");
         sb.append("🍽️ ").append(typeLabel(type)).append("\n");
-        if (type == ReservationType.VIP) {
+        if (celebration != null && celebration.isCelebration()) {
+            sb.append("🎉 ").append(celebrationLabel(celebration)).append("\n");
+            sb.append("🎁 ").append(honorees != null && honorees > 0 ? honorees : 1)
+                    .append(honorees != null && honorees > 1 ? " homenajeados" : " homenajeado").append("\n");
+        }
+        if (price.totalPrice() == null || price.totalPrice().signum() == 0) {
+            sb.append("💰 Sin costo (solo guardar el espacio)");
+        } else if (type == ReservationType.VIP && celebration != null && celebration.isCelebration()) {
+            sb.append("💰 Total: ").append(money(price.totalPrice()))
+              .append(" (espacio VIP + celebración)");
+        } else if (type == ReservationType.VIP) {
             sb.append("💰 Total: ").append(money(price.totalPrice())).append(" (valor del espacio completo)");
+        } else if (celebration != null && celebration.isCelebration()) {
+            sb.append("💰 Total: ").append(money(price.totalPrice()))
+              .append(" (incluye postre y decoración)");
         } else if (price.perPerson()) {
             sb.append("💰 Total: ").append(money(price.totalPrice()))
               .append(" (").append(money(price.unitPrice())).append(" por persona)");
@@ -198,7 +325,14 @@ public class ReservationMessages {
 
     public String confirmPrompt(ReservationType type, LocalDate date, LocalTime time, int partySize,
                                 PriceQuote price, String customerName) {
-        return "Perfecto. Tengo estos datos:\n\n" + summaryBlock(type, date, time, partySize, price, customerName)
+        return confirmPrompt(type, date, time, partySize, price, customerName, null, null);
+    }
+
+    public String confirmPrompt(ReservationType type, LocalDate date, LocalTime time, int partySize,
+                                PriceQuote price, String customerName,
+                                CelebrationType celebration, Integer honorees) {
+        return "Perfecto. Tengo estos datos:\n\n"
+                + summaryBlock(type, date, time, partySize, price, customerName, celebration, honorees)
                 + "\n\n¿Deseas continuar? Responde *sí* para reservar o dime qué quieres cambiar.";
     }
 
@@ -208,25 +342,30 @@ public class ReservationMessages {
         StringBuilder sb = new StringBuilder();
         sb.append("¡Listo! Registré tu reserva con el número *#").append(r.getReservationNumber()).append("* ✅\n\n");
         sb.append(summaryBlock(r.getReservationType(), r.getSlotDate(), r.getSlotTime(),
-                r.getPartySize(), price, r.getCustomerName()));
+                r.getPartySize(), price, r.getCustomerName(), r.getCelebrationType(), r.getHonorees()));
         sb.append("\n\n").append(paymentText(r));
         return sb.toString();
     }
 
     public String paymentText(ReservationEntity r) {
         RestaurantSettingsEntity s = settingsService.get();
+        BigDecimal total = r.getTotalPrice() != null ? r.getTotalPrice() : BigDecimal.ZERO;
         StringBuilder sb = new StringBuilder();
-        sb.append("💳 *Para confirmarla debes pagar ").append(money(r.getTotalPrice())).append("*.\n");
+        if (total.signum() == 0) {
+            sb.append("✅ No tienes que pagar nada: tu reserva es solo para guardar el espacio.\n\n");
+            sb.append("⏰ La mesa se guarda 15 minutos después de la hora. Si no llegas, puede quedar disponible.");
+            return sb.toString();
+        }
+        sb.append("💳 *Para confirmarla debes pagar ").append(money(total)).append("*.\n");
         if (s.getPaymentInstructions() != null) {
             sb.append(s.getPaymentInstructions()).append("\n");
         } else {
             sb.append("Un asesor te compartirá los datos para el pago.\n");
         }
-        sb.append("Cuando pagues, envíame aquí la captura del comprobante.");
-        if (r.getHoldExpiresAt() != null) {
-            sb.append("\n\n⏳ Tu cupo queda apartado ").append(holdText(r.getHoldExpiresAt()))
-              .append(". Si no recibimos el comprobante a tiempo, se libera automáticamente.");
-        }
+        sb.append("Cuando pagues, envíame aquí la captura del comprobante.\n\n");
+        sb.append("⚠️ Por favor paga tu reserva: si no se paga, el espacio no quedará reservado, "
+                + "se reasignará y tu reserva será cancelada.\n");
+        sb.append("⏰ La mesa se guarda 30 minutos después de la hora.");
         return sb.toString();
     }
 
@@ -258,8 +397,15 @@ public class ReservationMessages {
         String who = c.type() == ReservationType.VIP ? "el espacio VIP" : c.partySize() + " personas";
         return switch (c.reason()) {
             case OK -> "Todo en orden.";
-            case CLOSED_DAY -> "Para el " + date(c.date()) + " no tenemos servicio. Atendemos únicamente "
-                    + operatingDaysText() + "." + offerDays(c.nextOperatingDays());
+            case CLOSED_DAY -> {
+                if (c.type() == ReservationType.NORMAL && c.date() != null
+                        && c.date().getDayOfWeek() == DayOfWeek.SUNDAY) {
+                    yield "Los domingos solo tenemos espacio VIP. ¿Quieres que te reserve el VIP o te ofrezco "
+                            + operatingDaysText(ReservationType.NORMAL) + "?" + offerDays(c.nextOperatingDays());
+                }
+                yield "Para el " + date(c.date()) + " no tenemos servicio. Atendemos únicamente "
+                        + operatingDaysText(c.type()) + "." + offerDays(c.nextOperatingDays());
+            }
             case PAST_DATE -> "Esa fecha ya pasó." + offerDays(c.nextOperatingDays());
             case BLOCKED -> {
                 String base = "Para el " + date(c.date()) + (c.time() != null ? " " + atTime(c.time()) : "")
@@ -345,10 +491,17 @@ public class ReservationMessages {
 
     public String modifyPrompt(ReservationEntity r, LocalDate date, LocalTime time, int party,
                                ReservationType type, String customerName, PriceQuote price) {
+        return modifyPrompt(r, date, time, party, type, customerName, price,
+                r.getCelebrationType(), r.getHonorees());
+    }
+
+    public String modifyPrompt(ReservationEntity r, LocalDate date, LocalTime time, int party,
+                               ReservationType type, String customerName, PriceQuote price,
+                               CelebrationType celebration, Integer honorees) {
         BigDecimal delta = price.totalPrice().subtract(r.getTotalPrice());
         StringBuilder sb = new StringBuilder("Este sería el cambio en tu reserva #")
                 .append(r.getReservationNumber()).append(":\n\n")
-                .append(summaryBlock(type, date, time, party, price, customerName));
+                .append(summaryBlock(type, date, time, party, price, customerName, celebration, honorees));
         if (delta.signum() > 0) {
             sb.append("\n\nEl total sube ").append(money(delta)).append(" frente al valor anterior.");
         } else if (delta.signum() < 0) {
@@ -363,7 +516,7 @@ public class ReservationMessages {
                 r.getTotalPrice(), false);
         StringBuilder sb = new StringBuilder("¡Listo! Actualicé tu reserva *#").append(r.getReservationNumber())
                 .append("* ✅\n\n").append(summaryBlock(r.getReservationType(), r.getSlotDate(), r.getSlotTime(),
-                        r.getPartySize(), price, r.getCustomerName()));
+                        r.getPartySize(), price, r.getCustomerName(), r.getCelebrationType(), r.getHonorees()));
         if (delta != null && delta.signum() != 0 && r.getStatus() == ReservationStatus.CONFIRMED) {
             sb.append("\n\nComo el valor cambió, un asesor te contactará para ajustar la diferencia.");
         } else if (r.getStatus() == ReservationStatus.PAYMENT_PENDING || r.getStatus() == ReservationStatus.PENDING) {
@@ -418,24 +571,25 @@ public class ReservationMessages {
     public String confirmedNotification(ReservationEntity r) {
         PriceQuote price = new PriceQuote(r.getReservationType(), r.getPartySize(), r.getUnitPrice(),
                 r.getTotalPrice(), false);
+        boolean paid = r.getTotalPrice() != null && r.getTotalPrice().signum() > 0;
         return "🎉 ¡Tu reserva *#" + r.getReservationNumber() + "* está *confirmada*!\n\n"
                 + summaryBlock(r.getReservationType(), r.getSlotDate(), r.getSlotTime(), r.getPartySize(), price,
-                r.getCustomerName()) + "\n\n¡Te esperamos!";
+                r.getCustomerName(), r.getCelebrationType(), r.getHonorees())
+                + "\n\n⏰ La mesa se guarda " + (paid ? "30" : "15") + " minutos después de la hora.\n"
+                + "¡Te esperamos!";
     }
 
     public String receiptRejectedNotification(ReservationEntity r, String note) {
         StringBuilder sb = new StringBuilder("No pudimos validar el comprobante de tu reserva *#")
                 .append(r.getReservationNumber()).append("*.");
         if (note != null && !note.isBlank()) sb.append("\nMotivo: ").append(note);
-        sb.append("\n\nPor favor envíame de nuevo el comprobante de pago");
-        if (r.getHoldExpiresAt() != null) sb.append(" ").append(holdText(r.getHoldExpiresAt()));
-        sb.append(" para mantener tu cupo.");
+        sb.append("\n\nPor favor envíame de nuevo el comprobante de pago para mantener tu cupo.");
         return sb.toString();
     }
 
     public String expiredNotification(ReservationEntity r) {
         return "Tu reserva *#" + r.getReservationNumber() + "* del " + date(r.getSlotDate())
-                + " venció porque no recibimos el comprobante a tiempo y el cupo fue liberado. "
+                + " venció porque no recibimos el pago y el cupo quedó disponible automáticamente. "
                 + "Si todavía quieres reservar, escríbeme y la hacemos de nuevo 😊";
     }
 

@@ -11,6 +11,8 @@ import java.util.Set;
 @Data
 public class ReservationSettingsRequest {
     private BigDecimal normalPrice;
+    private BigDecimal celebrationPrice;
+    private BigDecimal extraHonoreePrice;
     private BigDecimal vipPrice;
     private Integer vipCapacity;
     private Set<DayOfWeek> operatingDays;

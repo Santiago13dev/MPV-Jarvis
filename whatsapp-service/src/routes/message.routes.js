@@ -31,6 +31,20 @@ router.post('/send/text', validateSecret, async (req, res) => {
   }
 });
 
+// POST /messages/send/poll
+router.post('/send/poll', validateSecret, async (req, res) => {
+  const { to, name, values, selectableCount } = req.body;
+  if (!to || !name || !Array.isArray(values) || values.length < 2) {
+    return res.status(400).json({ error: 'Fields "to", "name" and at least 2 "values" are required' });
+  }
+  try {
+    const result = await waClient.sendPollMessage(to, name, values, selectableCount || 1);
+    res.json({ success: true, messageId: result.key.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /messages/send/image
 router.post('/send/image', validateSecret, async (req, res) => {
   const { to, imageUrl, caption } = req.body;

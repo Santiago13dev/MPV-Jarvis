@@ -3,6 +3,7 @@ package com.whatsappmvp.application.reservation;
 import com.whatsappmvp.infrastructure.persistence.entity.ReservationBlockEntity;
 import com.whatsappmvp.infrastructure.persistence.entity.RestaurantSettingsEntity;
 import com.whatsappmvp.infrastructure.persistence.jpa.ReservationBlockJpaRepository;
+import com.whatsappmvp.domain.enums.ReservationType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -47,6 +48,25 @@ public class ReservationCalendarService {
                 && ColombianHolidays.isHoliday(date);
     }
 
+    /**
+     * Día operativo según el tipo de reserva:
+     *   NORMAL: sábados y lunes festivos.
+     *   VIP: sábados, domingos y lunes festivos.
+     * Los festivos que no son lunes no abren el restaurante (la operación es sábados/domingos/festivos lunes).
+     */
+    public boolean isOperatingDay(LocalDate date, RestaurantSettingsEntity s, ReservationType type) {
+        if (type == null) return isOperatingDay(date, s);
+        boolean holidayMonday = Boolean.TRUE.equals(s.getOpenOnHolidayMondays())
+                && date.getDayOfWeek() == DayOfWeek.MONDAY
+                && ColombianHolidays.isHoliday(date);
+        if (holidayMonday) return true;
+        if (type == ReservationType.VIP) {
+            return s.operatingDaysSet().contains(date.getDayOfWeek());
+        }
+        // NORMAL: solo sábados (los domingos son VIP).
+        return date.getDayOfWeek() == DayOfWeek.SATURDAY;
+    }
+
     /** Franjas del día: desde la hora de inicio hasta la hora final (inclusive) cada N minutos. */
     public List<LocalTime> slotTimes(RestaurantSettingsEntity s) {
         List<LocalTime> slots = new ArrayList<>();
@@ -81,12 +101,34 @@ public class ReservationCalendarService {
         return true;
     }
 
+    /** Igual que {@link #isDayBookable(LocalDate, RestaurantSettingsEntity)} pero según el tipo. */
+    public boolean isDayBookable(LocalDate date, RestaurantSettingsEntity s, ReservationType type) {
+        if (date.isBefore(today())) return false;
+        if (!isOperatingDay(date, s, type) || isDateBlocked(date)) return false;
+        if (date.equals(today())) {
+            List<LocalTime> slots = slotTimes(s);
+            return !slots.isEmpty() && slots.get(slots.size() - 1).isAfter(now());
+        }
+        return true;
+    }
+
     /** Próximos días reservables a partir de {@code from} (inclusive). */
     public List<LocalDate> nextBookableDays(LocalDate from, int count, RestaurantSettingsEntity s) {
         List<LocalDate> days = new ArrayList<>();
         LocalDate d = from.isBefore(today()) ? today() : from;
         for (int i = 0; i < MAX_LOOKAHEAD_DAYS && days.size() < count; i++, d = d.plusDays(1)) {
             if (isDayBookable(d, s)) days.add(d);
+        }
+        return days;
+    }
+
+    /** Próximos días reservables para un tipo concreto (normal o VIP). */
+    public List<LocalDate> nextBookableDays(LocalDate from, int count, RestaurantSettingsEntity s,
+                                            ReservationType type) {
+        List<LocalDate> days = new ArrayList<>();
+        LocalDate d = from.isBefore(today()) ? today() : from;
+        for (int i = 0; i < MAX_LOOKAHEAD_DAYS && days.size() < count; i++, d = d.plusDays(1)) {
+            if (isDayBookable(d, s, type)) days.add(d);
         }
         return days;
     }

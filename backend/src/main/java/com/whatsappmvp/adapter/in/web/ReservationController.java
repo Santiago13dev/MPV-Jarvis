@@ -95,8 +95,8 @@ public class ReservationController {
         Outcome outcome = reservationService.create(new CreateCommand(
                 req.getCustomerName(), req.getPhoneNumber(), req.getReceiptPhone(),
                 req.getReservationType(), req.getDate(), req.getTime(), req.getPartySize(),
-                req.getNotes(), null, blankToNull(idempotencyKey), req.getStatus(),
-                Actor.admin(auth.getName())));
+                req.getNotes(), null, blankToNull(idempotencyKey), req.getCelebrationType(),
+                req.getHonorees(), req.getStatus(), Actor.admin(auth.getName())));
         return respond(outcome, outcome.duplicate() ? "Reserva ya existente (solicitud repetida)" : "Reserva creada");
     }
 
@@ -105,7 +105,8 @@ public class ReservationController {
             @PathVariable UUID id, @Valid @RequestBody ReservationUpdateRequest req, Authentication auth) {
         Outcome outcome = reservationService.modify(id, new ModifyCommand(
                 req.getDate(), req.getTime(), req.getPartySize(), req.getReservationType(),
-                req.getCustomerName(), req.getNotes(), null, Actor.admin(auth.getName())));
+                req.getCustomerName(), req.getNotes(), req.getCelebrationType(), req.getHonorees(),
+                null, Actor.admin(auth.getName())));
         return respond(outcome, outcome.unchanged() ? "Sin cambios" : "Reserva actualizada");
     }
 

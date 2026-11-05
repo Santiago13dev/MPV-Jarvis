@@ -1,5 +1,6 @@
 package com.whatsappmvp.infrastructure.persistence.entity;
 
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import jakarta.persistence.*;
@@ -60,6 +61,13 @@ public class ReservationEntity {
 
     @Column(name = "people_count")
     private Integer partySize;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "celebration_type", length = 30)
+    private CelebrationType celebrationType;
+
+    @Column
+    private Integer honorees;
 
     @Column(name = "unit_price", precision = 12, scale = 2)
     private BigDecimal unitPrice;

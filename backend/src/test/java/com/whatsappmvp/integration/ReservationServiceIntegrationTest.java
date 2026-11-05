@@ -8,6 +8,7 @@ import com.whatsappmvp.application.service.ReservationService;
 import com.whatsappmvp.application.service.ReservationService.CreateCommand;
 import com.whatsappmvp.application.service.ReservationService.ModifyCommand;
 import com.whatsappmvp.application.service.ReservationService.Outcome;
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import com.whatsappmvp.domain.exception.BusinessException;
@@ -44,7 +45,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Reglas transaccionales del ReservationService contra PostgreSQL real.
  *
  * Usa la configuración por defecto del restaurante (V9): sábado y domingo, franjas cada 30 min de 11:30 a 13:00,
- * 50 cupos por franja, VIP de hasta 20 personas, máximo 40 por reserva normal.
+ * 50 cupos por franja, VIP de hasta 15 personas y sin máximo por reserva normal. La reserva normal es gratis
+ * si solo se guarda el espacio; las reservas con celebración se pagan aparte.
  * Cada test trabaja en su propia semana para que los cupos de un test no afecten a otro.
  */
 @SpringBootTest
@@ -84,7 +86,15 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     private Outcome create(ReservationType type, LocalDate date, LocalTime time, int party, String key) {
         return service.create(new CreateCommand("Cliente Test", String.valueOf(PHONES.incrementAndGet()), null,
-                type, date, time, party, null, null, key, ReservationStatus.PAYMENT_PENDING, Actor.admin("test")));
+                type, date, time, party, null, null, key, null, null,
+                ReservationStatus.PAYMENT_PENDING, Actor.admin("test")));
+    }
+
+    /** Reserva normal con paquete de celebración: queda pendiente de pago (no es gratis). */
+    private Outcome createPaid(LocalDate date, LocalTime time, int party) {
+        return service.create(new CreateCommand("Cliente Test", String.valueOf(PHONES.incrementAndGet()), null,
+                ReservationType.NORMAL, date, time, party, null, null, UUID.randomUUID().toString(),
+                CelebrationType.BIRTHDAY_MALE, 1, ReservationStatus.PAYMENT_PENDING, Actor.admin("test")));
     }
 
     private int reservedNormal(LocalDate date, LocalTime time) {
@@ -107,13 +117,19 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void normalPriceIsCalculatedByTheBackend() {
-        Outcome o = create(ReservationType.NORMAL, saturday, T1200, 5);
-        assertThat(o.ok()).isTrue();
-        assertThat(o.reservation().getUnitPrice()).isEqualByComparingTo("40000");
-        assertThat(o.reservation().getTotalPrice()).isEqualByComparingTo("40000");
-        assertThat(o.reservation().getStatus()).isEqualTo(ReservationStatus.PAYMENT_PENDING);
-        assertThat(o.reservation().getReservationNumber()).isNotNull();
-        assertThat(o.reservation().getHoldExpiresAt()).isNotNull();
+        Outcome free = create(ReservationType.NORMAL, saturday, T1130, 5);
+        assertThat(free.ok()).isTrue();
+        assertThat(free.reservation().getTotalPrice()).isEqualByComparingTo("0");
+        assertThat(free.reservation().getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(free.reservation().getHoldExpiresAt()).isNull();
+        assertThat(free.reservation().getReservationNumber()).isNotNull();
+
+        Outcome paid = createPaid(saturday, T1200, 5);
+        assertThat(paid.ok()).isTrue();
+        assertThat(paid.reservation().getUnitPrice()).isEqualByComparingTo("40000");
+        assertThat(paid.reservation().getTotalPrice()).isEqualByComparingTo("40000");
+        assertThat(paid.reservation().getStatus()).isEqualTo(ReservationStatus.PAYMENT_PENDING);
+        assertThat(paid.reservation().getHoldExpiresAt()).isNotNull();
     }
 
     // ── Capacidad ─────────────────────────────────────────────────────────
@@ -147,8 +163,8 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
                 .isEqualTo(Reason.INVALID_PARTY_SIZE);
         assertThat(create(ReservationType.NORMAL, saturday, T1200, -3).check().reason())
                 .isEqualTo(Reason.INVALID_PARTY_SIZE);
-        assertThat(create(ReservationType.NORMAL, saturday, T1200, 41).check().reason())
-                .isEqualTo(Reason.PARTY_TOO_LARGE);
+        // Ya no hay máximo por reserva normal: el límite real es el cupo de la franja (50).
+        assertThat(create(ReservationType.NORMAL, saturday, T1200, 41).ok()).isTrue();
     }
 
     // ── Calendario y horarios ─────────────────────────────────────────────
@@ -161,7 +177,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
         assertThat(o.check().reason()).isEqualTo(Reason.CLOSED_DAY);
         assertThat(o.check().nextOperatingDays()).isNotEmpty();
         assertThat(o.check().nextOperatingDays()).allMatch(d ->
-                d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY
+                d.getDayOfWeek() == DayOfWeek.SATURDAY
                         || (d.getDayOfWeek() == DayOfWeek.MONDAY && ColombianHolidays.isHoliday(d)));
 
         assertThat(create(ReservationType.NORMAL, saturday.minusDays(1), T1200, 4).check().reason())
@@ -214,11 +230,11 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
     }
 
     @Test
-    void vipOverTwentyPeopleIsRejected() {
-        Outcome o = create(ReservationType.VIP, saturday, T1130, 21);
+    void vipOverFifteenPeopleIsRejected() {
+        Outcome o = create(ReservationType.VIP, saturday, T1130, 16);
         assertThat(o.ok()).isFalse();
         assertThat(o.check().reason()).isEqualTo(Reason.VIP_CAPACITY_EXCEEDED);
-        assertThat(create(ReservationType.VIP, saturday, T1130, 20).ok()).isTrue(); // exactamente 20
+        assertThat(create(ReservationType.VIP, saturday, T1130, 15).ok()).isTrue(); // exactamente 15
     }
 
     // ── Concurrencia ──────────────────────────────────────────────────────
@@ -273,7 +289,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void theSameReceiptMessageIsRegisteredOnce() {
-        UUID id = create(ReservationType.NORMAL, saturday, T1200, 2).reservation().getId();
+        UUID id = createPaid(saturday, T1200, 2).reservation().getId();
         service.registerReceipt(id, "receipts/x.jpg", "image/jpeg", "wamid-dup", Actor.customer("1"));
         service.registerReceipt(id, "receipts/x.jpg", "image/jpeg", "wamid-dup", Actor.customer("1"));
         assertThat(receipts.findByReservationIdOrderByUploadedAtDesc(id)).hasSize(1);
@@ -302,7 +318,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void aCustomerCannotCancelSomeoneElsesReservation() {
-        UUID id = create(ReservationType.NORMAL, saturday, T1200, 3).reservation().getId();
+        UUID id = createPaid(saturday, T1200, 3).reservation().getId();
         assertThatThrownBy(() -> service.cancel(id, Actor.customer("999"), null, "999"))
                 .isInstanceOf(BusinessException.class);
         assertThat(service.getById(id).getStatus()).isEqualTo(ReservationStatus.PAYMENT_PENDING);
@@ -312,44 +328,42 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void modifyingMovesTheSlotKeepsTheFixedPriceAndFreesTheOldSlot() {
-        Outcome o = create(ReservationType.NORMAL, saturday, T1130, 4);
+        Outcome o = createPaid(saturday, T1130, 4);
         ReservationEntity r = o.reservation();
         assertThat(r.getTotalPrice()).isEqualByComparingTo("40000");
 
-        Outcome moved = service.modify(r.getId(), new ModifyCommand(sunday, T1200, 6, null, null, null,
-                r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
+        Outcome moved = service.modify(r.getId(), new ModifyCommand(saturday, T1300, 6, null, null, null,
+                null, null, r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
 
         assertThat(moved.ok()).isTrue();
-        assertThat(moved.reservation().getSlotDate()).isEqualTo(sunday);
-        assertThat(moved.reservation().getSlotTime()).isEqualTo(T1200);
+        assertThat(moved.reservation().getSlotTime()).isEqualTo(T1300);
         assertThat(moved.reservation().getTotalPrice()).isEqualByComparingTo("40000");
         assertThat(moved.priceDelta()).isEqualByComparingTo("0");
         assertThat(reservedNormal(saturday, T1130)).isZero();
-        assertThat(reservedNormal(sunday, T1200)).isEqualTo(6);
+        assertThat(reservedNormal(saturday, T1300)).isEqualTo(6);
     }
 
     @Test
     void modifyingIntoAFullSlotIsRejectedAndNothingChanges() {
-        create(ReservationType.NORMAL, sunday, T1300, 25);
-        create(ReservationType.NORMAL, sunday, T1300, 25);
-        ReservationEntity r = create(ReservationType.NORMAL, saturday, T1130, 4).reservation();
+        create(ReservationType.NORMAL, saturday, T1300, 25);
+        create(ReservationType.NORMAL, saturday, T1300, 25);
+        ReservationEntity r = createPaid(saturday, T1130, 4).reservation();
 
-        Outcome o = service.modify(r.getId(), new ModifyCommand(sunday, T1300, null, null, null, null,
-                r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
+        Outcome o = service.modify(r.getId(), new ModifyCommand(saturday, T1300, null, null, null, null,
+                null, null, r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
 
         assertThat(o.ok()).isFalse();
         assertThat(o.check().reason()).isEqualTo(Reason.INSUFFICIENT_CAPACITY);
         ReservationEntity unchanged = service.getById(r.getId());
-        assertThat(unchanged.getSlotDate()).isEqualTo(saturday);
         assertThat(unchanged.getSlotTime()).isEqualTo(T1130);
-        assertThat(reservedNormal(sunday, T1300)).isEqualTo(50);
+        assertThat(reservedNormal(saturday, T1300)).isEqualTo(50);
     }
 
     @Test
     void modifyingToTheSameValuesChangesNothing() {
         ReservationEntity r = create(ReservationType.NORMAL, saturday, T1200, 4).reservation();
         Outcome o = service.modify(r.getId(), new ModifyCommand(saturday, T1200, 4, null, null, null,
-                r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
+                null, null, r.getPhoneNumber(), Actor.customer(r.getPhoneNumber())));
         assertThat(o.unchanged()).isTrue();
     }
 
@@ -357,7 +371,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void paymentLifecycleFromPendingToConfirmedToCancelled() {
-        UUID id = create(ReservationType.NORMAL, saturday, T1200, 5).reservation().getId();
+        UUID id = createPaid(saturday, T1200, 5).reservation().getId();
         assertThat(service.getById(id).getStatus()).isEqualTo(ReservationStatus.PAYMENT_PENDING);
 
         ReservationEntity sent = service.registerReceipt(id, "receipts/a.jpg", "image/jpeg", "wamid-1",
@@ -384,7 +398,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void receiptsAreOnlyAcceptedWhileThePaymentIsOpen() {
-        UUID id = create(ReservationType.NORMAL, saturday, T1200, 2).reservation().getId();
+        UUID id = createPaid(saturday, T1200, 2).reservation().getId();
         service.cancel(id, Actor.admin("asesor"), null, null);
         assertThatThrownBy(() -> service.registerReceipt(id, "receipts/c.jpg", "image/jpeg", "wamid-3",
                 Actor.customer("1"))).isInstanceOf(BusinessException.class);
@@ -394,7 +408,7 @@ class ReservationServiceIntegrationTest extends PostgresTestBase {
 
     @Test
     void expiredHoldsAreReleasedAndTheCapacityComesBack() {
-        UUID id = create(ReservationType.NORMAL, saturday, T1200, 40).reservation().getId();
+        UUID id = createPaid(saturday, T1200, 40).reservation().getId();
         assertThat(service.expire(id)).isFalse(); // aún vigente
 
         ReservationEntity e = reservations.findById(id).orElseThrow();

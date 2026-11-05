@@ -202,6 +202,10 @@ export type ReservationStatus =
 
 export type ReservationType = 'NORMAL' | 'VIP';
 
+/** Motivo de la reserva. NONE = solo guardar el espacio (sin postre ni decoración). */
+export type CelebrationType =
+  'NONE' | 'BIRTHDAY' | 'BIRTHDAY_MALE' | 'BIRTHDAY_FEMALE' | 'ANNIVERSARY' | 'GRADUATION' | 'FIRST_COMMUNION';
+
 export interface Reservation {
   id: string;
   reservationNumber: number;
@@ -212,6 +216,8 @@ export interface Reservation {
   date: string;          // yyyy-MM-dd
   time: string;          // HH:mm:ss
   partySize: number;
+  celebrationType?: CelebrationType | null;
+  honorees?: number | null;
   unitPrice: number;
   totalPrice: number;    // lo calcula el backend
   status: ReservationStatus;
@@ -234,6 +240,8 @@ export interface ReservationRequest {
   date: string;
   time: string;
   partySize: number;
+  celebrationType?: CelebrationType;
+  honorees?: number;
   notes?: string;
   status?: ReservationStatus;   // PAYMENT_PENDING (default) | PENDING | CONFIRMED
 }
@@ -246,6 +254,8 @@ export interface ReservationUpdate {
   time?: string;
   partySize?: number;
   reservationType?: ReservationType;
+  celebrationType?: CelebrationType;
+  honorees?: number;
 }
 
 export interface ReservationFilter {
@@ -294,6 +304,8 @@ export interface ReservationReceipt {
 
 export interface ReservationSettings {
   normalPrice: number;
+  celebrationPrice: number;           // paquete postre + decoración (1 homenajeado)
+  extraHonoreePrice: number;          // por homenajeado adicional
   vipPrice: number;
   vipCapacity: number;
   operatingDays: string[];            // 'SATURDAY', 'SUNDAY'...

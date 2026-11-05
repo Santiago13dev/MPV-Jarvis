@@ -19,6 +19,8 @@ class DateExpressionResolverTest {
     private final DateExpressionResolver onMonday = resolverAt("2026-10-05T14:19:00Z");
     /** Sábado 10 de octubre de 2026, 10:00 en Bogotá. */
     private final DateExpressionResolver onSaturday = resolverAt("2026-10-10T15:00:00Z");
+    /** Martes 20 de octubre de 2026, 10:00 en Bogotá (el día del chat de prueba). */
+    private final DateExpressionResolver onTuesday = resolverAt("2026-10-20T15:00:00Z");
 
     private static DateExpressionResolver resolverAt(String instant) {
         return new DateExpressionResolver(Clock.fixed(Instant.parse(instant), BOGOTA));
@@ -82,5 +84,15 @@ class DateExpressionResolverTest {
     void textWithoutDateAndMorningAsPeriodAreNotDates() {
         assertThat(onMonday.resolve("hola").status()).isEqualTo(Status.NONE);
         assertThat(onMonday.resolve("en la mañana").status()).isEqualTo(Status.NONE);
+    }
+
+    @Test
+    void abbreviatedMonthsAndWeekdayPlusDayFromTheRealChat() {
+        assertThat(onTuesday.resolve("24 oct").date()).isEqualTo(LocalDate.of(2026, 10, 24));
+        assertThat(onTuesday.resolve("05 de dic").date()).isEqualTo(LocalDate.of(2026, 12, 5));
+        assertThat(onTuesday.resolve("05 dic").date()).isEqualTo(LocalDate.of(2026, 12, 5));
+        // "sábado 31" era el bug: se tomaba el próximo sábado (24) en vez del 31.
+        assertThat(onTuesday.resolve("sábado 31").date()).isEqualTo(LocalDate.of(2026, 10, 31));
+        assertThat(onTuesday.resolve("sábado 24").date()).isEqualTo(LocalDate.of(2026, 10, 24));
     }
 }

@@ -36,6 +36,17 @@ public class TimeExpressionResolver {
     private static final String MER = "(am|pm|de la manana|de la tarde|de la noche|del dia|del mediodia)";
 
     private static final Pattern CLOCK = Pattern.compile("\\b(\\d{1,2})\\s*:\\s*(\\d{2})\\s*(am|pm)?\\b");
+    // "1-00pm", "1.00pm", "1 00pm": el guion/punto/espacio también se usa como separador de hora.
+    private static final Pattern SEP_CLOCK_MER = Pattern.compile(
+            "\\b(\\d{1,2})\\s*[-.\\s]\\s*(\\d{2})\\s*(am|pm)\\b");
+    // "a las 1-00", "las 12.30": separador dentro de una frase (sin am/pm).
+    private static final Pattern LAS_SEP = Pattern.compile(
+            "\\b(?:a\\s+)?las?\\s+(\\d{1,2})\\s*[-.]\\s*(\\d{2})\\b");
+    // "100pm" = 1:00 PM, "1230pm" = 12:30 PM (formato sin separador que usa mucha gente).
+    private static final Pattern COMPACT_MER = Pattern.compile("\\b(\\d{3,4})\\s*(am|pm)\\b");
+    // "a las 1230", "para las 100": hora compacta dentro de una frase, sin am/pm.
+    private static final Pattern LAS_COMPACT = Pattern.compile(
+            "\\b(?:a\\s+)?las?\\s+(\\d{3,4})\\b(?!\\s*(?:personas?|pax|invitados|comensales|mesas?))");
     private static final Pattern LAS = Pattern.compile(
             "\\b(?:a\\s+)?las?\\s+" + HOUR + "(?!\\s*(?:personas?|pax|invitados|mesas?))"
                     + "(?:\\s+(?:y|con)\\s+(media|cuarto|\\d{1,2}))?"
@@ -47,6 +58,11 @@ public class TimeExpressionResolver {
     private static final Pattern PERIOD = Pattern.compile("\\b(?:en la|por la|de la|a la)\\s+(manana|tarde|noche)\\b");
     private static final Pattern BARE = Pattern.compile(
             "^(?:a\\s+)?(?:las?\\s+)?" + HOUR + "(?:\\s+(?:y|con)\\s+(media|cuarto|\\d{1,2}))?(?:\\s*" + MER + ")?$");
+    // Respuestas cortas cuando el bot acaba de pedir la hora: "1-00", "1.00", "100", "1230".
+    private static final Pattern BARE_SEP = Pattern.compile(
+            "^(?:a\\s+)?(?:las?\\s+)?(\\d{1,2})\\s*[-.]\\s*(\\d{2})$");
+    private static final Pattern BARE_COMPACT = Pattern.compile(
+            "^(?:a\\s+)?(?:las?\\s+)?(\\d{3,4})$");
 
     /**
      * @param raw              texto del cliente
@@ -61,6 +77,32 @@ public class TimeExpressionResolver {
         Matcher m = CLOCK.matcher(t);
         if (m.find()) {
             return build(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), 0, m.group(3), hint, pmPivotHour);
+        }
+
+        // "1-00pm", "1.00pm", "1 00pm"
+        m = SEP_CLOCK_MER.matcher(t);
+        if (m.find()) {
+            return build(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), 0, m.group(3), hint, pmPivotHour);
+        }
+
+        // "a las 1-00", "las 12.30" (sin am/pm)
+        m = LAS_SEP.matcher(t);
+        if (m.find()) {
+            return build(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), 0, null, hint, pmPivotHour);
+        }
+
+        // "100pm" → 1:00 PM, "1230pm" → 12:30 PM
+        m = COMPACT_MER.matcher(t);
+        if (m.find()) {
+            Resolution compact = compactTime(m.group(1), m.group(2), hint, pmPivotHour);
+            if (compact.hasTime()) return compact;
+        }
+
+        // "a las 1230" → 12:30, "para las 100" → 1:00 PM (dentro de una frase completa)
+        m = LAS_COMPACT.matcher(t);
+        if (m.find()) {
+            Resolution compact = compactTime(m.group(1), null, hint, pmPivotHour);
+            if (compact.hasTime()) return compact;
         }
 
         m = LAS.matcher(t);
@@ -87,6 +129,15 @@ public class TimeExpressionResolver {
         }
 
         if (bareNumberAllowed) {
+            m = BARE_SEP.matcher(t);
+            if (m.find()) {
+                return build(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), 0, null, hint, pmPivotHour);
+            }
+            m = BARE_COMPACT.matcher(t);
+            if (m.find()) {
+                Resolution compact = compactTime(m.group(1), null, hint, pmPivotHour);
+                if (compact.hasTime()) return compact;
+            }
             m = BARE.matcher(t);
             if (m.find()) {
                 int hour = hourOf(m.group(1));
@@ -117,6 +168,22 @@ public class TimeExpressionResolver {
     private int hourOf(String token) {
         Integer w = WORDS.get(token);
         return w != null ? w : Integer.parseInt(token);
+    }
+
+    /** "100" → 1:00, "1230" → 12:30, "130" → 1:30. */
+    private Resolution compactTime(String digits, String meridiem, Period hint, int pivot) {
+        if (digits == null || digits.length() < 3 || digits.length() > 4) return Resolution.none();
+        int hour;
+        int minute;
+        if (digits.length() == 3) {
+            hour = digits.charAt(0) - '0';
+            minute = Integer.parseInt(digits.substring(1));
+        } else {
+            hour = Integer.parseInt(digits.substring(0, 2));
+            minute = Integer.parseInt(digits.substring(2));
+        }
+        if (minute > 59) return Resolution.none();
+        return build(hour, minute, 0, meridiem, hint, pivot);
     }
 
     private Resolution build(int hour, int minute, int minusMinutes, String meridiem, Period hint, int pivot) {

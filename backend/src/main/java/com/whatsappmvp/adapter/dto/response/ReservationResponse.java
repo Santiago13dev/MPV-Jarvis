@@ -1,5 +1,6 @@
 package com.whatsappmvp.adapter.dto.response;
 
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import com.whatsappmvp.infrastructure.persistence.entity.ReservationEntity;
@@ -24,6 +25,8 @@ public class ReservationResponse {
     private LocalDate date;
     private LocalTime time;
     private Integer partySize;
+    private CelebrationType celebrationType;
+    private Integer honorees;
     private BigDecimal unitPrice;
     private BigDecimal totalPrice;
     private ReservationStatus status;
@@ -52,6 +55,8 @@ public class ReservationResponse {
                 .date(e.getSlotDate())
                 .time(e.getSlotTime())
                 .partySize(e.getPartySize())
+                .celebrationType(e.getCelebrationType())
+                .honorees(e.getHonorees())
                 .unitPrice(e.getUnitPrice())
                 .totalPrice(e.getTotalPrice())
                 .status(e.getStatus())

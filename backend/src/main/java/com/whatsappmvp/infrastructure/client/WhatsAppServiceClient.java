@@ -11,6 +11,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -37,6 +38,13 @@ public class WhatsAppServiceClient {
     public void sendText(String to, String text) {
         Map<String, String> body = Map.of("to", to, "text", text);
         post("/messages/send/text", body);
+    }
+
+    /** Enviar encuesta (poll) de WhatsApp. */
+    public void sendPoll(String to, String name, List<String> values, int selectableCount) {
+        Map<String, Object> body = Map.of(
+                "to", to, "name", name, "values", values, "selectableCount", selectableCount);
+        post("/messages/send/poll", body);
     }
 
     /** Enviar imagen */

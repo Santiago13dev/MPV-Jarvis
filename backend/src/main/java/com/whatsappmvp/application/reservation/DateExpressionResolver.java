@@ -49,11 +49,24 @@ public class DateExpressionResolver {
             Map.entry("septiembre", 9), Map.entry("setiembre", 9), Map.entry("octubre", 10),
             Map.entry("noviembre", 11), Map.entry("diciembre", 12));
 
+    /** Abreviaturas que la gente escribe por WhatsApp: "24 oct", "05 dic", "2 nov". */
+    private static final Map<String, Integer> MONTHS_ABBR = Map.ofEntries(
+            Map.entry("ene", 1), Map.entry("feb", 2), Map.entry("mar", 3), Map.entry("abr", 4),
+            Map.entry("may", 5), Map.entry("jun", 6), Map.entry("jul", 7), Map.entry("ago", 8),
+            Map.entry("sep", 9), Map.entry("sept", 9), Map.entry("oct", 10), Map.entry("nov", 11),
+            Map.entry("dic", 12));
+
     private static final Pattern ISO = Pattern.compile("\\b(\\d{4})-(\\d{1,2})-(\\d{1,2})\\b");
     private static final Pattern SLASH = Pattern.compile("\\b(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{2,4}))?\\b");
     private static final Pattern DE_MES = Pattern.compile(
             "\\b(\\d{1,2})\\s+de\\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|"
                     + "octubre|noviembre|diciembre)(?:\\s+(?:de|del)\\s+(\\d{4}))?\\b");
+    private static final Pattern DE_MES_ABBR = Pattern.compile(
+            "\\b(\\d{1,2})\\s*(?:de\\s+)?(ene|feb|mar|abr|may|jun|jul|ago|sept?|oct|nov|dic)\\b"
+                    + "(?:\\s+(?:de\\s+|del\\s+)?(\\d{4}))?");
+    // "sábado 31", "domingo 2": el número es el día del mes, no el próximo sábado cualquiera.
+    private static final Pattern WEEKDAY_DAY = Pattern.compile(
+            "\\b(?:(?:este|el|ese)\\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)s?\\s+(\\d{1,2})\\b");
     private static final Pattern PASADO_MANANA = Pattern.compile("\\bpasado manana\\b");
     // "mañana" = día siguiente; "la mañana"/"esta mañana" = franja del día (no es una fecha)
     private static final Pattern MANANA = Pattern.compile("(?<!la )(?<!esta )\\bmanana\\b");
@@ -71,10 +84,13 @@ public class DateExpressionResolver {
         if (raw == null || raw.isBlank()) return Resolution.none();
         LocalDate today = LocalDate.now(clock);
         StringBuilder text = new StringBuilder(" " + TextNormalizer.normalize(raw) + " ");
+        String original = text.toString();
         Set<LocalDate> found = new LinkedHashSet<>();
 
         scan(text, ISO, m -> safeDate(int4(m, 1), int2(m, 2), int2(m, 3)), found);
         scan(text, DE_MES, m -> inferYear(MONTHS.get(m.group(2)), Integer.parseInt(m.group(1)),
+                m.group(3) != null ? Integer.parseInt(m.group(3)) : null, today), found);
+        scan(text, DE_MES_ABBR, m -> inferYear(MONTHS_ABBR.get(m.group(2)), Integer.parseInt(m.group(1)),
                 m.group(3) != null ? Integer.parseInt(m.group(3)) : null, today), found);
         scan(text, SLASH, m -> inferYear(Integer.parseInt(m.group(2)), Integer.parseInt(m.group(1)),
                 m.group(3) != null ? normalizeYear(m.group(3)) : null, today), found);
@@ -84,6 +100,9 @@ public class DateExpressionResolver {
 
         // Si ya hay una fecha explícita ("lunes 2 de noviembre"), esa fecha manda. Antes se sumaba
         // también el día de la semana y el bot respondía "me mencionaste varias fechas".
+        if (found.isEmpty()) {
+            scan(text, WEEKDAY_DAY, m -> weekdayWithDay(m, today), found);
+        }
         if (found.isEmpty()) {
             scan(text, WEEKDAY, m -> weekday(m, today), found);
         }
@@ -97,9 +116,27 @@ public class DateExpressionResolver {
         }
 
         if (found.size() > 1) return Resolution.ambiguous("MULTIPLE");
-        if (found.size() == 1) return Resolution.resolved(found.iterator().next());
+        if (found.size() == 1) {
+            Resolution mismatch = weekdayMismatch(original, found.iterator().next(), today);
+            if (mismatch != null) return mismatch;
+            return Resolution.resolved(found.iterator().next());
+        }
         if (WEEKEND.matcher(text).find()) return Resolution.ambiguous("WEEKEND");
         return Resolution.none();
+    }
+
+    /**
+     * "sábado 30" cuando el 30 cae viernes: en vez de elegir un día distinto en silencio
+     * (el cliente pidió sábado), se pregunta cuál de los dos quiere.
+     */
+    private Resolution weekdayMismatch(String original, LocalDate resolved, LocalDate today) {
+        Matcher m = WEEKDAY_DAY.matcher(original);
+        if (!m.find()) return null;
+        DayOfWeek dow = DAYS.get(m.group(1));
+        if (dow == null || resolved.getDayOfWeek() == dow) return null;
+        LocalDate alternative = resolved.plusDays(1).with(TemporalAdjusters.nextOrSame(dow));
+        if (alternative.equals(resolved)) return null;
+        return Resolution.ambiguous("WEEKDAY|" + resolved + "|" + alternative);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
@@ -131,6 +168,23 @@ public class DateExpressionResolver {
                 : today.with(TemporalAdjusters.nextOrSame(dow));
     }
 
+    /**
+     * "sábado 31" / "domingo 2": busca el próximo día del mes que caiga en ese día de la semana.
+     * Si en los próximos 2 meses no coincide (p. ej. "sábado 30" cuando el 30 es viernes),
+     * gana el número de día para no mandar al cliente a una fecha lejana.
+     */
+    private LocalDate weekdayWithDay(Matcher m, LocalDate today) {
+        DayOfWeek dow = DAYS.get(m.group(1));
+        int day = Integer.parseInt(m.group(2));
+        LocalDate cursor = today.withDayOfMonth(1);
+        for (int i = 0; i < 2; i++, cursor = cursor.plusMonths(1)) {
+            if (day > cursor.lengthOfMonth()) continue;
+            LocalDate candidate = cursor.withDayOfMonth(day);
+            if (!candidate.isBefore(today) && candidate.getDayOfWeek() == dow) return candidate;
+        }
+        return dayOfMonth(day, today);
+    }
+
     private LocalDate dayOfMonth(int day, LocalDate today) {
         LocalDate cursor = today.withDayOfMonth(1);
         for (int i = 0; i < 12; i++, cursor = cursor.plusMonths(1)) {
@@ -145,7 +199,12 @@ public class DateExpressionResolver {
     private LocalDate inferYear(int month, int day, Integer year, LocalDate today) {
         if (year != null) return safeDate(year, month, day);
         LocalDate candidate = safeDate(today.getYear(), month, day);
-        if (candidate != null && candidate.isBefore(today)) candidate = safeDate(today.getYear() + 1, month, day);
+        // Solo se pasa al año siguiente si la fecha quedó claramente atrás ("5 de enero" dicho en
+        // octubre). Si fue hace pocos días ("24 oct" dicho el 26) se devuelve tal cual: el motor
+        // de reservas avisa que ya pasó, en vez de agendar sin querer para dentro de un año.
+        if (candidate != null && candidate.isBefore(today.minusDays(45))) {
+            candidate = safeDate(today.getYear() + 1, month, day);
+        }
         return candidate;
     }
 

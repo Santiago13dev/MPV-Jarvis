@@ -31,7 +31,17 @@ public class RestaurantSettingsEntity {
 
     @Column(name = "normal_price", nullable = false, precision = 12, scale = 2)
     @Builder.Default
-    private BigDecimal normalPrice = new BigDecimal("40000");
+    private BigDecimal normalPrice = new BigDecimal("0");
+
+    /** Paquete de celebración (postre + decoración) para 1 homenajeado. */
+    @Column(name = "celebration_price", nullable = false, precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal celebrationPrice = new BigDecimal("40000");
+
+    /** Valor adicional por cada homenajeado extra. */
+    @Column(name = "extra_honoree_price", nullable = false, precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal extraHonoreePrice = new BigDecimal("10000");
 
     @Column(name = "vip_price", nullable = false, precision = 12, scale = 2)
     @Builder.Default
@@ -39,7 +49,7 @@ public class RestaurantSettingsEntity {
 
     @Column(name = "vip_capacity", nullable = false)
     @Builder.Default
-    private Integer vipCapacity = 20;
+    private Integer vipCapacity = 15;
 
     /** CSV de DayOfWeek, p. ej. "SATURDAY,SUNDAY". */
     @Column(name = "operating_days", nullable = false, length = 100)
@@ -69,11 +79,11 @@ public class RestaurantSettingsEntity {
 
     @Column(name = "max_party_size", nullable = false)
     @Builder.Default
-    private Integer maxPartySize = 40;
+    private Integer maxPartySize = 0;
 
     @Column(name = "hold_minutes", nullable = false)
     @Builder.Default
-    private Integer holdMinutes = 60;
+    private Integer holdMinutes = 1440;
 
     @Column(name = "vip_consumes_normal_capacity", nullable = false)
     @Builder.Default

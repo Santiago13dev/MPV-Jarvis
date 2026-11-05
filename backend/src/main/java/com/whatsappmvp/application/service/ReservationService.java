@@ -13,6 +13,7 @@ import com.whatsappmvp.application.reservation.ReservationNotificationEvent;
 import com.whatsappmvp.application.reservation.ReservationNotificationEvent.Type;
 import com.whatsappmvp.application.reservation.RestaurantSettingsService;
 import com.whatsappmvp.domain.enums.AuditActorType;
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReceiptStatus;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
@@ -87,11 +88,13 @@ public class ReservationService {
     public record CreateCommand(String customerName, String phoneNumber, String receiptPhone,
                                 ReservationType type, LocalDate date, LocalTime time, int partySize,
                                 String notes, UUID conversationId, String idempotencyKey,
+                                CelebrationType celebrationType, Integer honorees,
                                 ReservationStatus initialStatus, Actor actor) {}
 
     /** null = sin cambio. {@code requiredOwnerPhone} != null → solo el dueño puede modificar. */
     public record ModifyCommand(LocalDate date, LocalTime time, Integer partySize, ReservationType type,
-                                String customerName, String notes, String requiredOwnerPhone, Actor actor) {}
+                                String customerName, String notes, CelebrationType celebrationType,
+                                Integer honorees, String requiredOwnerPhone, Actor actor) {}
 
     /**
      * Resultado de crear/modificar. Si {@code check.available()} es false NO se hizo ningún cambio y
@@ -162,7 +165,8 @@ public class ReservationService {
             }
         }
 
-        RequestCheck check = availability.check(c.date(), c.time(), type, c.partySize(), null);
+        RequestCheck check = availability.check(c.date(), c.time(), type, c.partySize(), null,
+                c.celebrationType(), c.honorees());
         if (!check.available()) {
             log.info("[RESERVATION] create rejected customer={} type={} date={} time={} partySize={} reason={}",
                     mask(c.phoneNumber()), type, c.date(), c.time(), c.partySize(), check.reason());
@@ -171,7 +175,14 @@ public class ReservationService {
 
         RestaurantSettingsEntity settings = settingsService.get();
         PriceQuote price = check.price();
-        ReservationStatus status = c.initialStatus() != null ? c.initialStatus() : ReservationStatus.PAYMENT_PENDING;
+        boolean free = price.totalPrice() == null || price.totalPrice().signum() == 0;
+        ReservationStatus status = c.initialStatus() != null
+                ? c.initialStatus()
+                : (free ? ReservationStatus.CONFIRMED : ReservationStatus.PAYMENT_PENDING);
+        if (free && (status == ReservationStatus.PENDING || status == ReservationStatus.PAYMENT_PENDING)) {
+            // Una reserva sin pago no tiene sentido que quede pendiente de pago.
+            status = ReservationStatus.CONFIRMED;
+        }
         if (status != ReservationStatus.PENDING && status != ReservationStatus.PAYMENT_PENDING
                 && status != ReservationStatus.CONFIRMED) {
             throw new BusinessException("Estado inicial no permitido: " + status);
@@ -187,12 +198,14 @@ public class ReservationService {
                 .slotDate(c.date())
                 .slotTime(c.time())
                 .partySize(c.partySize())
+                .celebrationType(c.celebrationType())
+                .honorees(c.honorees())
                 .unitPrice(price.unitPrice())
                 .totalPrice(price.totalPrice())
                 .status(status)
                 .notes(blankToNull(c.notes()))
                 .idempotencyKey(c.idempotencyKey())
-                .holdExpiresAt(ReservationStatus.HOLDS.contains(status)
+                .holdExpiresAt(!free && ReservationStatus.HOLDS.contains(status)
                         ? now.plusMinutes(settings.getHoldMinutes()) : null)
                 .conversation(c.conversationId() != null
                         ? conversationRepository.getReferenceById(c.conversationId()) : null)
@@ -255,10 +268,15 @@ public class ReservationService {
         String newNotes = m.notes() != null
                 ? (m.notes().isBlank() ? null : m.notes().trim())
                 : r.getNotes();
+        CelebrationType newCelebration = m.celebrationType() != null
+                ? m.celebrationType() : r.getCelebrationType();
+        Integer newHonorees = m.honorees() != null ? m.honorees() : r.getHonorees();
 
         boolean same = newType == r.getReservationType() && newDate.equals(r.getSlotDate())
                 && newTime.equals(r.getSlotTime()) && newParty == Objects.requireNonNullElse(r.getPartySize(), 1)
-                && Objects.equals(newName, r.getCustomerName()) && Objects.equals(newNotes, r.getNotes());
+                && Objects.equals(newName, r.getCustomerName()) && Objects.equals(newNotes, r.getNotes())
+                && newCelebration == r.getCelebrationType()
+                && Objects.equals(newHonorees, r.getHonorees());
         if (same) return Outcome.unchanged(r);
 
         List<LocalDate> vipDates = new ArrayList<>();
@@ -268,7 +286,8 @@ public class ReservationService {
         lockSlots(List.of(slotKey(r.getSlotDate(), r.getSlotTime()), slotKey(newDate, newTime)));
 
         // La propia reserva se excluye: sus cupos actuales quedan libres para el cambio
-        RequestCheck check = availability.check(newDate, newTime, newType, newParty, r.getId());
+        RequestCheck check = availability.check(newDate, newTime, newType, newParty, r.getId(),
+                newCelebration, newHonorees);
         if (!check.available()) {
             log.info("[RESERVATION] modify rejected reservationId={} reason={}", r.getId(), check.reason());
             return Outcome.rejected(check, r);
@@ -283,6 +302,8 @@ public class ReservationService {
         r.setPartySize(newParty);
         r.setCustomerName(newName);
         r.setNotes(newNotes);
+        r.setCelebrationType(newCelebration);
+        r.setHonorees(newHonorees);
         r.setUnitPrice(check.price().unitPrice());
         r.setTotalPrice(check.price().totalPrice());
         BigDecimal delta = r.getTotalPrice().subtract(oldTotal);
@@ -290,8 +311,17 @@ public class ReservationService {
             String note = "Cambio de precio tras modificación: diferencia " + delta.toPlainString() + " COP (revisar con el cliente)";
             r.setNotes(r.getNotes() == null ? note : r.getNotes() + "\n" + note);
         }
-        if (ReservationStatus.HOLDS.contains(r.getStatus())) {
+        boolean free = r.getTotalPrice().signum() == 0;
+        if (free && (r.getStatus() == ReservationStatus.PENDING
+                || r.getStatus() == ReservationStatus.PAYMENT_PENDING)) {
+            r.setStatus(ReservationStatus.CONFIRMED);
+            r.setConfirmedAt(calendar.nowDateTime());
+            r.setConfirmedBy(actor.id());
+            r.setHoldExpiresAt(null);
+        } else if (!free && ReservationStatus.HOLDS.contains(r.getStatus())) {
             r.setHoldExpiresAt(calendar.nowDateTime().plusMinutes(settingsService.get().getHoldMinutes()));
+        } else if (free) {
+            r.setHoldExpiresAt(null);
         }
         r.syncLegacyFields();
         reservationRepository.saveAndFlush(r);

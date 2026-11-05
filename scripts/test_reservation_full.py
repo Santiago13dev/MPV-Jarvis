@@ -139,6 +139,24 @@ def say(phone, text, name="Cliente E2E", **kw):
     print(f"\n👤 {name}: {text}")
     reply = send(phone, text, name, **kw)
     print(f"🤖 {reply if reply else '(sin respuesta)'}")
+    return auto_survey(phone, reply, name, **kw)
+
+
+# Respuesta automática a la encuesta de celebración (V13). El guion VIP la cambia a "no"
+# para validar el precio base del espacio sin el paquete de cumpleaños.
+AUTO_CELEBRATION = "cumpleaños hombre"
+
+
+def auto_survey(phone, reply, name, **kw):
+    """V13 agregó la encuesta de celebración (motivo + homenajeados) antes de confirmar.
+    Los guiones de esta batería son anteriores: se responde por el paquete de cumpleaños
+    (así el total sigue siendo $40.000) y se devuelve la respuesta que el guion espera."""
+    if reply and "motivo de la reserva" in reply:
+        reply = send(phone, AUTO_CELEBRATION, name, **kw)
+        print(f"🤖 (auto motivo) {reply if reply else '(sin respuesta)'}")
+        if reply and "homenajeados" in reply:
+            reply = send(phone, "1", name, **kw)
+            print(f"🤖 (auto homenajeado) {reply if reply else '(sin respuesta)'}")
     return reply
 
 
@@ -146,7 +164,8 @@ def reservations(phone):
     raw = psql(f"""
     SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (
       SELECT id, reservation_number, reservation_type, slot_date, slot_time, people_count,
-             unit_price, total_price, status, customer_name, idempotency_key, hold_expires_at
+             unit_price, total_price, status, customer_name, celebration_type, honorees,
+             idempotency_key, hold_expires_at
       FROM reservations WHERE phone_number='{phone}' ORDER BY created_at DESC
     ) t""")
     return json.loads(raw or "[]")
@@ -249,6 +268,33 @@ def run_create_normal():
         check("A11. idempotency key wa:", str(res["idempotency_key"]).startswith("wa:"), res["idempotency_key"])
         check("A12. hold futuro", str(res["hold_expires_at"]) > time.strftime("%Y-%m-%d"), res["hold_expires_at"])
 
+    # ── V13: reserva normal sin celebración = sin costo ──────────────────────
+    p2 = PHONES["normal2"]
+    clean(p2)
+    r = send(p2, "reserva para 4 personas el 31 de octubre a las 12:00 a nombre de Luis Gómez", "Luis")
+    check_contains("A13. pregunta motivo de celebración", r, "motivo de la reserva")
+    r = send(p2, "no", "Luis")
+    check_contains("A14. resumen sin costo", r, "sin costo", "4 personas")
+    r = send(p2, "sí", "Luis")
+    check_contains("A15. crea reserva gratis", r, "registre tu reserva")
+    res2 = reservation(p2)
+    check_eq("A16. total 0", res2 and float(res2["total_price"]), 0.0)
+    check_eq("A17. sin celebración", res2 and res2["celebration_type"], "NONE")
+
+    # ── Encuesta de celebración: no deja la conversación atrapada ────────────
+    p3 = PHONES["name"]
+    clean(p3)
+    r = send(p3, "reserva para 4 personas el 31 de octubre a las 12:00", "Atrapado")
+    check_contains("A18. pide motivo", r, "motivo de la reserva")
+    r = send(p3, "hola", "Atrapado")
+    check_contains("A19. segunda oportunidad", r, "no entendi el motivo")
+    r = send(p3, "que pena", "Atrapado")
+    check_contains("A20. cierra la encuesta sola", r, "sin celebracion")
+    r = send(p3, "Luis Gómez", "Atrapado")
+    check_contains("A21. pide confirmación", r, "tengo estos datos")
+    r = send(p3, "sí", "Atrapado")
+    check_contains("A22. reserva creada tras el rescate", r, "registre tu reserva")
+
 
 def run_create_steps():
     print("\n" + "=" * 78 + "\nB. CREAR — paso a paso\n" + "=" * 78)
@@ -277,10 +323,12 @@ def run_create_steps():
 
 def run_vip():
     print("\n" + "=" * 78 + "\nC. VIP — información, creación y precio\n" + "=" * 78)
+    global AUTO_CELEBRATION
+    AUTO_CELEBRATION = "no"   # el VIP se prueba sin paquete: total = valor del espacio
     p = PHONES["vip"]
     clean(p)
     r1 = say(p, "¿tienen VIP?", "Valentina")
-    check_contains("C1. info VIP", r1, "espacio vip privado", "$100.000", "hasta 20")
+    check_contains("C1. info VIP", r1, "espacio vip privado", "$100.000", "hasta 15")
     r2 = say(p, "para 10 personas el 31 de octubre", "Valentina")
     check_contains("C2. ofrece horarios", r2, "disponibilidad", "11:30")
     r3 = say(p, "a las 12:00", "Valentina")
@@ -306,6 +354,7 @@ def run_vip():
     check_contains("C12. descarta borrador", r7, "no hice ninguna reserva")
     check("C13. sin reserva tras descartar", reservation(p2) is None, "creó una reserva")
     check("C14. sin draft tras descartar", draft(p2) is None, draft(p2))
+    AUTO_CELEBRATION = "cumpleaños hombre"
 
 
 def run_vip_limits():
@@ -313,7 +362,7 @@ def run_vip_limits():
     p = PHONES["vipcap"]
     clean(p)
     r = say(p, "quiero el VIP para 25 personas el 31 de octubre a las 12:00", "Grupo")
-    check_contains("D1. rechaza por capacidad VIP", r, "capacidad para hasta 20")
+    check_contains("D1. rechaza por capacidad VIP", r, "capacidad para hasta 15")
     check("D2. no crea reserva", reservation(p) is None, "creó reserva")
 
     p2 = PHONES["vipdup"]
@@ -354,7 +403,7 @@ def run_validations():
     print("\n" + "=" * 78 + "\nF. VALIDACIONES — personas, día, fecha, hora\n" + "=" * 78)
     cases = [
         ("valid0", "reserva para 0 personas el 31 de octubre", ["numero de personas valido", "minimo 1"]),
-        ("valid50", "reserva para 50 personas el 31 de octubre", ["mas de 40", "asesor"]),
+        ("valid50", "reserva para 50 personas el 31 de octubre", ["disponibilidad"]),
         ("closed", "reserva para 4 personas el 30 de octubre", ["no tenemos servicio"]),
         ("past", "reserva para 4 personas el 18 de octubre de 2025", ["ya paso"]),
         ("time15", "reserva para 4 personas el 31 de octubre a las 3 de la tarde", ["horarios", "11:30"]),
@@ -657,7 +706,7 @@ def run_concurrency():
     def create(p, idx):
         try:
             body = {"customerName": f"Conc {idx}", "phoneNumber": p, "reservationType": "NORMAL",
-                    "date": SUN, "time": "11:30", "partySize": 1, "status": "CONFIRMED"}
+                    "date": "2026-11-07", "time": "11:30", "partySize": 1, "status": "CONFIRMED"}
             r = api("POST", "/reservations", body, token)
             results.append(("ok", p, r))
         except urllib.error.HTTPError as e:
@@ -683,7 +732,7 @@ def run_hold_expiration():
     print("\n" + "=" * 78 + "\nP. EXPIRACIÓN DE HOLD\n" + "=" * 78)
     p = PHONES["hold"]
     clean(p)
-    r = say(p, "reserva para 2 personas el 1 de noviembre a las 12:00 a nombre de Hugo Pardo", "Hugo")
+    r = say(p, "reserva para 2 personas el 7 de noviembre a las 12:00 a nombre de Hugo Pardo", "Hugo")
     check_contains("P1. resumen", r, "2 personas")
     r2 = say(p, "sí", "Hugo")
     check_contains("P2. creada", r2, "registre tu reserva")
@@ -701,7 +750,7 @@ def run_hold_expiration():
     # El cupo quedó libre: se puede volver a reservar la misma franja
     p2 = PHONES["extra2"]
     clean(p2)
-    r3 = say(p2, "reserva para 2 personas el 1 de noviembre a las 12:00 a nombre de Inés Gil", "Inés")
+    r3 = say(p2, "reserva para 2 personas el 7 de noviembre a las 12:00 a nombre de Inés Gil", "Inés")
     check_contains("P5. franja liberada", r3, "2 personas")
     r4 = say(p2, "sí", "Inés")
     check_contains("P6. re-reserva", r4, "registre tu reserva")

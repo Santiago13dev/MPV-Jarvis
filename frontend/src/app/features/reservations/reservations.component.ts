@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { DomSanitizer, SafeUrl } from '@angular/platform-browser';
 import { ApiService } from '../../core/services/api.service';
 import {
-  CapacityRule, Reservation, ReservationBlock, ReservationFilter, ReservationReceipt,
+  CapacityRule, CelebrationType, Reservation, ReservationBlock, ReservationFilter, ReservationReceipt,
   ReservationSettings, ReservationStats, ReservationStatus, ReservationType, SlotAvailability
 } from '../../core/models/models';
 
@@ -23,6 +23,8 @@ interface EditForm {
   time: string;
   partySize: number;
   type: ReservationType;
+  celebrationType: CelebrationType | '';
+  honorees: number | null;
   slots: string[];
   busy: boolean;
 }
@@ -35,6 +37,8 @@ interface CreateForm {
   date: string;
   time: string;
   partySize: number;
+  celebrationType: CelebrationType | '';
+  honorees: number | null;
   notes: string;
   status: ReservationStatus;
   slots: string[];
@@ -110,7 +114,7 @@ interface CreateForm {
             <thead>
               <tr>
                 <th>N°</th><th>Cliente</th><th>Fecha y hora</th><th>Personas</th>
-                <th>Tipo</th><th>Total</th><th>Estado</th><th>Acciones</th>
+                <th>Motivo</th><th>Tipo</th><th>Total</th><th>Estado</th><th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -119,6 +123,12 @@ interface CreateForm {
                 <td data-label="Cliente"><strong>{{ r.customerName }}</strong><div class="sub">{{ r.phoneNumber }}</div></td>
                 <td data-label="Fecha y hora">{{ fmtDate(r.date) }}<div class="sub">{{ fmtTime(r.time) }}</div></td>
                 <td data-label="Personas">{{ r.partySize }}</td>
+                <td data-label="Motivo">
+                  {{ celebrationLabel(r.celebrationType) }}
+                  <div class="sub" *ngIf="r.celebrationType && r.celebrationType !== 'NONE' && r.honorees">
+                    {{ r.honorees }} {{ r.honorees === 1 ? 'homenajeado' : 'homenajeados' }}
+                  </div>
+                </td>
                 <td data-label="Tipo"><span class="chip" [class.chip-vip]="r.reservationType === 'VIP'">{{ r.reservationType === 'VIP' ? '⭐ VIP' : 'Normal' }}</span></td>
                 <td data-label="Total">{{ r.totalPrice | currency:'COP':'symbol-narrow':'1.0-0' }}</td>
                 <td data-label="Estado">
@@ -196,16 +206,20 @@ interface CreateForm {
       <div class="card" *ngIf="cfg as c">
         <h3>Reglas de reserva</h3>
         <div class="grid">
-          <label>Precio reserva normal (fijo)<input type="number" min="0" [(ngModel)]="c.normalPrice"></label>
+          <label>Precio base reserva normal (0 = gratis)<input type="number" min="0" [(ngModel)]="c.normalPrice"></label>
+          <label>Paquete celebración · postre + decoración (1 homenajeado)<input type="number" min="0" [(ngModel)]="c.celebrationPrice"></label>
+          <label>Homenajeado adicional<input type="number" min="0" [(ngModel)]="c.extraHonoreePrice"></label>
           <label>Precio VIP (espacio completo)<input type="number" min="0" [(ngModel)]="c.vipPrice"></label>
           <label>Capacidad máx. VIP (personas · 1 espacio por día)<input type="number" min="1" [(ngModel)]="c.vipCapacity"></label>
           <label>Capacidad por franja (por defecto)<input type="number" min="1" [(ngModel)]="c.defaultSlotCapacity"></label>
-          <label>Máx. personas por reserva<input type="number" min="1" [(ngModel)]="c.maxPartySize"></label>
+          <label>Máx. personas por reserva normal (0 = sin límite)<input type="number" min="0" [(ngModel)]="c.maxPartySize"></label>
           <label>Inicio de reservas<input type="time" [(ngModel)]="c.reservationStartTime"></label>
           <label>Fin de reservas<input type="time" [(ngModel)]="c.reservationEndTime"></label>
           <label>Intervalo entre franjas (min)<input type="number" min="5" step="5" [(ngModel)]="c.slotIntervalMinutes"></label>
-          <label>Vigencia de reserva sin pago (min)<input type="number" min="1" [(ngModel)]="c.holdMinutes"></label>
+          <label>Vigencia interna sin pago (min · no se muestra al cliente)<input type="number" min="1" [(ngModel)]="c.holdMinutes"></label>
         </div>
+        <p class="sub">Reserva normal: sábados y lunes festivos. VIP: sábados, domingos y lunes festivos.
+          Los domingos solo se ofrece VIP. La mesa se guarda 30 min si hubo pago y 15 min si fue solo guardar el espacio.</p>
         <div class="days">
           <span>Días de atención:</span>
           <label class="check" *ngFor="let d of days">
@@ -257,6 +271,15 @@ interface CreateForm {
           <label>Fecha<input type="date" [(ngModel)]="f.date"></label>
           <label>Personas<input type="number" min="1" [(ngModel)]="f.partySize"></label>
           <label>Hora<input type="time" [(ngModel)]="f.time"></label>
+          <label>Motivo
+            <select [(ngModel)]="f.celebrationType">
+              <option value="">Sin definir (solo guardar espacio)</option>
+              <option *ngFor="let c of celebrationOptions" [value]="c.key">{{ c.label }}</option>
+            </select>
+          </label>
+          <label *ngIf="f.celebrationType && f.celebrationType !== 'NONE'">Homenajeados
+            <input type="number" min="1" [(ngModel)]="f.honorees">
+          </label>
           <label>Estado inicial
             <select [(ngModel)]="f.status">
               <option value="PAYMENT_PENDING">Pago pendiente</option>
@@ -288,6 +311,15 @@ interface CreateForm {
           <label>Personas<input type="number" min="1" [(ngModel)]="e.partySize"></label>
           <label>Tipo
             <select [(ngModel)]="e.type"><option value="NORMAL">Normal</option><option value="VIP">VIP</option></select>
+          </label>
+          <label>Motivo
+            <select [(ngModel)]="e.celebrationType">
+              <option value="">Sin cambio</option>
+              <option *ngFor="let c of celebrationOptions" [value]="c.key">{{ c.label }}</option>
+            </select>
+          </label>
+          <label *ngIf="e.celebrationType && e.celebrationType !== 'NONE'">Homenajeados
+            <input type="number" min="1" [(ngModel)]="e.honorees">
           </label>
           <label>Notas<textarea rows="2" [(ngModel)]="e.notes"></textarea></label>
         </div>
@@ -420,6 +452,14 @@ export class ReservationsComponent implements OnInit, OnDestroy {
     CANCELLED: 'Cancelada',
     EXPIRED: 'Expirada'
   };
+  readonly celebrationOptions: { key: CelebrationType; label: string }[] = [
+    { key: 'NONE', label: 'Solo guardar el espacio' },
+    { key: 'BIRTHDAY_MALE', label: 'Cumpleaños (hombre)' },
+    { key: 'BIRTHDAY_FEMALE', label: 'Cumpleaños (mujer)' },
+    { key: 'ANNIVERSARY', label: 'Aniversario' },
+    { key: 'GRADUATION', label: 'Grado' },
+    { key: 'FIRST_COMMUNION', label: 'Primera comunión' }
+  ];
   readonly days = [
     { key: 'MONDAY', label: 'Lunes' }, { key: 'TUESDAY', label: 'Martes' },
     { key: 'WEDNESDAY', label: 'Miércoles' }, { key: 'THURSDAY', label: 'Jueves' },
@@ -599,7 +639,8 @@ export class ReservationsComponent implements OnInit, OnDestroy {
   openCreate(): void {
     this.create = {
       customerName: '', phoneNumber: '', receiptPhone: '', type: 'NORMAL',
-      date: '', time: '', partySize: 2, notes: '', status: 'PAYMENT_PENDING',
+      date: '', time: '', partySize: 2, celebrationType: '', honorees: null,
+      notes: '', status: 'PAYMENT_PENDING',
       slots: [], busy: false, key: this.newKey()
     };
   }
@@ -622,6 +663,8 @@ export class ReservationsComponent implements OnInit, OnDestroy {
       date: f.date,
       time: this.hhmm(f.time),
       partySize: Number(f.partySize),
+      celebrationType: f.celebrationType || undefined,
+      honorees: f.celebrationType && f.celebrationType !== 'NONE' ? Number(f.honorees || 1) : undefined,
       notes: f.notes.trim() || undefined,
       status: f.status
     }, f.key).subscribe({
@@ -639,7 +682,9 @@ export class ReservationsComponent implements OnInit, OnDestroy {
     this.edit = {
       r, customerName: r.customerName, notes: r.notes ?? '', date: r.date,
       time: this.hhmm(r.time), partySize: r.partySize,
-      type: r.reservationType, slots: [], busy: false
+      type: r.reservationType,
+      celebrationType: r.celebrationType ?? '', honorees: r.honorees ?? null,
+      slots: [], busy: false
     };
   }
 
@@ -656,6 +701,7 @@ export class ReservationsComponent implements OnInit, OnDestroy {
     const patch: {
       customerName?: string; notes?: string; date?: string; time?: string;
       partySize?: number; reservationType?: ReservationType;
+      celebrationType?: CelebrationType; honorees?: number;
     } = {};
     if (name !== e.r.customerName) patch.customerName = name;
     if ((e.notes || '').trim() !== (e.r.notes ?? '').trim()) patch.notes = (e.notes || '').trim();
@@ -663,6 +709,11 @@ export class ReservationsComponent implements OnInit, OnDestroy {
     if (e.time && this.hhmm(e.time) !== this.hhmm(e.r.time)) patch.time = this.hhmm(e.time);
     if (Number(e.partySize) !== e.r.partySize) patch.partySize = Number(e.partySize);
     if (e.type !== e.r.reservationType) patch.reservationType = e.type;
+    if (e.celebrationType && (e.celebrationType !== (e.r.celebrationType ?? '')
+        || Number(e.honorees || 0) !== Number(e.r.honorees || 0))) {
+      patch.celebrationType = e.celebrationType;
+      patch.honorees = e.celebrationType === 'NONE' ? 0 : Number(e.honorees || 1);
+    }
     if (Object.keys(patch).length === 0) {
       this.error('No hay cambios para guardar.');
       return;
@@ -837,6 +888,12 @@ export class ReservationsComponent implements OnInit, OnDestroy {
 
   trackById(_: number, r: Reservation): string {
     return r.id;
+  }
+
+  celebrationLabel(c: CelebrationType | null | undefined): string {
+    if (!c) return '—';
+    return this.celebrationOptions.find(o => o.key === c)?.label
+      ?? (c === 'BIRTHDAY' ? 'Cumpleaños' : c);
   }
 
   /** "2026-10-10" → "sáb, 10 oct" (sin conversión de zona horaria). */

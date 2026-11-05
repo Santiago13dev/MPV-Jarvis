@@ -5,6 +5,7 @@ import com.whatsappmvp.domain.enums.MessageDirection;
 import com.whatsappmvp.domain.enums.MessageType;
 import com.whatsappmvp.domain.enums.ProcessedBy;
 import com.whatsappmvp.application.reservation.ReservationConversationService;
+import com.whatsappmvp.application.reservation.ReservationConversationService.Poll;
 import com.whatsappmvp.application.reservation.TextNormalizer;
 import com.whatsappmvp.config.AppProperties;
 import com.whatsappmvp.infrastructure.client.OpenAIServiceClient;
@@ -132,6 +133,10 @@ public class MessageProcessingService {
                         Thread.sleep(delayMs);
                     }
                     whatsAppClient.sendText(ps.targetJid(), ps.text());
+                    if (ps.poll() != null) {
+                        whatsAppClient.sendPoll(ps.targetJid(), ps.poll().name(), ps.poll().options(),
+                                ps.poll().selectableCount());
+                    }
                 } finally {
                     rateLimitService.releaseOutbound(phone);
                 }
@@ -158,6 +163,17 @@ public class MessageProcessingService {
             }
         }
 
+        // ── PASO 2.4: Ignorar eventos sin contenido real ─────────────────────
+        // Baileys puede emitir mensajes de protocolo/recibos con messageType UNKNOWN y sin texto.
+        // No son mensajes del cliente: no deben crear contactos ni consumir el rate limit.
+        boolean emptyUnknown = (messageType == null || messageType == MessageType.UNKNOWN)
+                && (content == null || content.isBlank())
+                && (mediaBase64 == null || mediaBase64.isBlank());
+        if (emptyUnknown) {
+            log.info("[Pipeline] Ignoring empty/unknown event for {} | waMessageId={}", phone, waMessageId);
+            return;
+        }
+
         // ── PASO 3: Obtener o crear contacto ──────────────────────────────────
         ContactEntity contact = getOrCreateContact(phone, displayName);
 
@@ -177,8 +193,6 @@ public class MessageProcessingService {
             conversationRepository.save(conversation);
         }
 
-        boolean isFirstMessage = isNewConversation[0];
-
         // ── PASO 2.5: Rate Limit ──────────────────────────────────────────────
         if (!rateLimitService.isAllowed(phone)) {
             log.warn("[Pipeline] Rate limit exceeded for: {} — sending notice", phone);
@@ -191,6 +205,10 @@ public class MessageProcessingService {
         // ── PASO 4: Persistir mensaje INBOUND ─────────────────────────────────
         MessageEntity inboundMessage = persistMessage(conversation, waMessageId,
                 MessageDirection.INBOUND, content, messageType, null, 0);
+
+        // ¿Es el primer mensaje de este contacto (aunque la conversación se haya recreado)?
+        // Así un "Hola" posterior no vuelve a mandar ubicación + bienvenida completa.
+        boolean firstEverContact = messageRepository.countByContactId(contact.getId()) <= 1;
 
         // Actualizar last_seen del contacto
         contact.setLastSeen(LocalDateTime.now());
@@ -292,7 +310,7 @@ public class MessageProcessingService {
                     // ("reserva para 10 y voy con mi perro"): se contesta la FAQ primero
                     String engineText = withSideFaqAnswer(content, reservationResult.text());
                     sendAndPersistResponse(conversation, remoteJid, engineText,
-                            ProcessedBy.SYSTEM, 0, pendingSends);
+                            ProcessedBy.SYSTEM, 0, pendingSends, reservationResult.poll());
                     return;
                 }
                 case QUESTION_WITH_REMINDER -> {
@@ -363,19 +381,26 @@ public class MessageProcessingService {
             return;
         }
 
-        // ── PASO 6: Mensaje de bienvenida (solo el primer mensaje) ────────────
+        // ── PASO 6: Mensaje de bienvenida (solo el primer mensaje del contacto) ─
         // Va DESPUÉS de keywords/FAQ: si el primer mensaje es una pregunta con match,
         // se contesta. Si es pregunta sin match, se salta a la IA (paso 9) en vez de
         // devolver solo el saludo ("¿hacen domicilios?" no debe recibir el bienvenido).
-        if (isFirstMessage && !looksLikeQuestion(content)) {
+        if (firstEverContact && !looksLikeQuestion(content)) {
             String welcome = businessHoursService.getWelcomeMessage();
             sendAndPersistResponse(conversation, remoteJid, welcome, ProcessedBy.SYSTEM, 0, pendingSends);
 
-            // Enviar ubicación del restaurante
+            // Enviar ubicación del restaurante solo en la bienvenida inicial
             sendLocation(remoteJid, conversation,
                     4.49083, -74.25944, "BENDITO CHICHARRÓN — Sibaté, Cundinamarca");
 
             // NO continuar a IA — la bienvenida es la única respuesta
+            return;
+        }
+
+        // Un "Hola" de alguien que ya escribió antes no repite ubicación ni bienvenida completa.
+        if (!firstEverContact && isGreeting(normalizedContent)) {
+            sendAndPersistResponse(conversation, remoteJid,
+                    "¡Hola de nuevo! 👋 ¿En qué te puedo ayudar?", ProcessedBy.SYSTEM, 0, pendingSends);
             return;
         }
 
@@ -389,7 +414,7 @@ public class MessageProcessingService {
         // }
 
         // ── PASO 8.5: Timeout — transferir a humano si pasó demasiado tiempo ──
-        if (!isFirstMessage && humanTransferService.isTimeoutTriggered(conversation)) {
+        if (!firstEverContact && humanTransferService.isTimeoutTriggered(conversation)) {
             log.info("[Pipeline] Timeout triggered → transferring to human");
             String transferMsg = humanTransferService.transferToHuman(conversation, "TIMEOUT", content);
             sendAndPersistResponse(conversation, remoteJid, transferMsg, ProcessedBy.SYSTEM, 0, pendingSends);
@@ -498,19 +523,31 @@ public class MessageProcessingService {
         return messageRepository.save(message);
     }
 
-    private record PendingSend(String targetJid, String text) {}
+    private record PendingSend(String targetJid, String text, Poll poll) {}
 
     private void sendAndPersistResponse(ConversationEntity conversation, String remoteJid,
                                          String responseText, ProcessedBy processedBy, int tokensUsed,
                                          List<PendingSend> pendingSends) {
+        sendAndPersistResponse(conversation, remoteJid, responseText, processedBy, tokensUsed, pendingSends, null);
+    }
+
+    private void sendAndPersistResponse(ConversationEntity conversation, String remoteJid,
+                                         String responseText, ProcessedBy processedBy, int tokensUsed,
+                                         List<PendingSend> pendingSends, Poll poll) {
         // Usar remoteJid (JID completo) para enviar, no solo el phone
         String targetJid = remoteJid != null && !remoteJid.isBlank()
                 ? remoteJid
                 : conversation.getContact().getPhone() + "@s.whatsapp.net";
 
-        // Persistir respuesta OUTBOUND (dentro de la transacción)
+        // Persistir respuesta OUTBOUND (dentro de la transacción). Si hay encuesta, se guardan
+        // también las opciones para que el dashboard muestre lo mismo que vio el cliente.
+        String persistedText = responseText;
+        if (poll != null && poll.options() != null && !poll.options().isEmpty()) {
+            persistedText = responseText + "\n\n" + poll.options().stream()
+                    .map(o -> "• " + o).collect(java.util.stream.Collectors.joining("\n"));
+        }
         MessageEntity outbound = persistMessage(conversation, null,
-                MessageDirection.OUTBOUND, responseText, MessageType.TEXT, processedBy, tokensUsed);
+                MessageDirection.OUTBOUND, persistedText, MessageType.TEXT, processedBy, tokensUsed);
         outbound.setStatus("QUEUED");
         messageRepository.save(outbound);
 
@@ -520,7 +557,7 @@ public class MessageProcessingService {
                 conversation.getContact().getDisplayName()));
 
         // Cola para envío FUERA de la transacción (sleep + WhatsApp API)
-        pendingSends.add(new PendingSend(targetJid, responseText));
+        pendingSends.add(new PendingSend(targetJid, responseText, poll));
     }
 
     private Map<String, Object> buildMessageEvent(MessageEntity msg, String phone, String name) {
@@ -668,6 +705,13 @@ public class MessageProcessingService {
      * Ej.: "reserva para 10 y voy con mi perro" → FAQ de mascotas + "Para cuántas personas…".
      */
     private String withSideFaqAnswer(String content, String engineText) {
+        // La restricción del VIP ya explica la excepción; anteponer la FAQ general de mascotas confunde.
+        if (engineText.contains("VIP no manejamos")) return engineText;
+        // La encuesta de celebración ya trae el precio del paquete: anteponer la FAQ de decoración
+        // repetía la misma cifra dos veces ("$40.000..." + "el paquete incluye...").
+        if (engineText.contains("homenajeados") || engineText.contains("motivo de la reserva")) {
+            return engineText;
+        }
         var sideFaq = faqMatchingService.findMatch(content, MessageProcessingService::isReservationFaq, 3);
         if (sideFaq.isEmpty()) {
             return engineText;
@@ -679,13 +723,19 @@ public class MessageProcessingService {
     /** FAQs que pertenecen al dominio de reservas: el motor ya responde esas, no se anteponen. */
     private static boolean isReservationFaq(FaqItemEntity faq) {
         String question = faq.getQuestion().toLowerCase(Locale.ROOT);
-        if (question.contains("reserva")) return true;
+        if (question.contains("reserv") || question.contains("apartar") || question.contains("agendar")
+                || question.contains("horario") || question.contains("abren") || question.contains("cierran")) {
+            return true;
+        }
         String[] keywords = faq.getKeywords();
         if (keywords == null) return false;
         for (String keyword : keywords) {
             String k = keyword.toLowerCase(Locale.ROOT);
-            if (k.contains("reserv") || k.equals("mesa") || k.equals("mesas") || k.equals("cita")
-                    || k.equals("apartar") || k.contains("disponibilidad") || k.contains("cupo")) {
+            if (k.contains("reserv") || k.contains("apart") || k.contains("agend")
+                    || k.equals("mesa") || k.equals("mesas") || k.equals("cita")
+                    || k.contains("disponibilidad") || k.contains("cupo")
+                    || k.equals("horario") || k.contains("abren") || k.contains("cierran")
+                    || k.contains("atienden")) {
                 return true;
             }
         }
@@ -700,5 +750,14 @@ public class MessageProcessingService {
         String first = n.split(" ")[0];
         return QUESTION_OPENERS.contains(first) || n.startsWith("hay ") || n.startsWith("se puede ")
                 || n.startsWith("me dan ") || n.startsWith("nos dan ");
+    }
+
+    /** Saludo simple: no merece repetir ubicación ni la bienvenida completa. */
+    private static boolean isGreeting(String n) {
+        if (n == null) return false;
+        String t = n.trim();
+        return t.equals("hola") || t.equals("holaa") || t.equals("buenas") || t.equals("buenos dias")
+                || t.equals("buenas tardes") || t.equals("buenas noches") || t.startsWith("hola ")
+                || t.startsWith("buenas ");
     }
 }

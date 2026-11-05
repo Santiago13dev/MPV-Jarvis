@@ -1,5 +1,6 @@
 package com.whatsappmvp.adapter.dto.request;
 
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationStatus;
 import com.whatsappmvp.domain.enums.ReservationType;
 import jakarta.validation.constraints.Max;
@@ -38,6 +39,14 @@ public class ReservationRequest {
     private Integer partySize;
 
     private String notes;
+
+    /** Motivo de celebración (opcional). NONE = solo guardar el espacio. */
+    private CelebrationType celebrationType;
+
+    /** Número de homenajeados (1 por defecto si hay celebración). */
+    @Min(value = 0, message = "El número de homenajeados no puede ser negativo")
+    @Max(value = 100, message = "Número de homenajeados no válido")
+    private Integer honorees;
 
     /** Estado inicial: PENDING, PAYMENT_PENDING (default) o CONFIRMED (ya pagó, p. ej. efectivo). */
     private ReservationStatus status;

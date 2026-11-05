@@ -1,5 +1,6 @@
 package com.whatsappmvp.adapter.dto.request;
 
+import com.whatsappmvp.domain.enums.CelebrationType;
 import com.whatsappmvp.domain.enums.ReservationType;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -25,4 +26,11 @@ public class ReservationUpdateRequest {
 
     /** null = sin cambio; cadena vacía = borrar la nota. */
     private String notes;
+
+    /** null = sin cambio; NONE = quitar la celebración. */
+    private CelebrationType celebrationType;
+
+    @Min(value = 0, message = "El número de homenajeados no puede ser negativo")
+    @Max(value = 100, message = "Número de homenajeados no válido")
+    private Integer honorees;
 }

@@ -15,6 +15,9 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidBroadcast,
+  decryptPollVote,
+  sha256,
+  jidNormalizedUser,
 } = require('@whiskeysockets/baileys');
 const path = require('path');
 const fs = require('fs');
@@ -34,6 +37,10 @@ let reconnectTimer = null;
 let permanentDisconnect = false; // true after 401/403 — blocks ALL reconnects
 let healthCheckInterval = null;
 let lastPongTime = Date.now();
+
+// Encuestas (polls) enviadas: se guardan para poder descifrar el voto que llega después.
+// La clave de cifrado viaja en el mensaje original, no en el voto.
+const sentPolls = new Map(); // pollMessageId -> { message, options, jid, createdAt }
 
 // ── Límites para evitar loops infinitos de reconexión ─────────────────────────
 const MAX_CONFLICT_RETRIES = 5;      // Max intentos de 440 antes de cooldown largo
@@ -303,6 +310,51 @@ async function connect() {
         if (msg.key.fromMe) continue;
         if (msg.key.remoteJid === 'status@broadcast') continue;
 
+        // Voto de una encuesta (poll): Baileys 6.7 no lo procesa solo, así que lo desciframos
+        // con la copia del poll que enviamos y lo reenviamos al backend como texto.
+        const pollUpdate = msg.message?.pollUpdateMessage;
+        if (pollUpdate) {
+          try {
+            const pollId = pollUpdate.pollCreationMessageKey?.id;
+            const stored = pollId ? sentPolls.get(pollId) : null;
+            if (!stored) {
+              // Encuesta anterior a un reinicio del servicio: no se puede descifrar el voto.
+              logger.warn({ pollId }, '[WA] Poll vote for unknown poll — asking customer to type the answer');
+              await askToTypeAnswer(msg.key.remoteJid);
+              continue;
+            }
+            if (stored) {
+              const pollEncKey = stored.message?.messageContextInfo?.messageSecret
+                || stored.messageContextInfo?.messageSecret;
+              if (pollEncKey) {
+                const vote = decryptPollVote(pollUpdate.vote, {
+                  pollEncKey,
+                  pollCreatorJid: jidNormalizedUser(sock.user.id),
+                  pollMsgId: pollId,
+                  voterJid: msg.key.remoteJid,
+                });
+                const hashToOption = new Map(
+                  stored.options.map(o => [sha256(Buffer.from(o)).toString(), o])
+                );
+                const selected = (vote.selectedOptions || [])
+                  .map(o => hashToOption.get(o.toString()))
+                  .filter(Boolean);
+                if (selected.length > 0) {
+                  const fake = { ...msg, message: { conversation: selected.join(', ') } };
+                  await webhookService.forwardIncomingMessage(fake, sock);
+                  logger.info({ pollId, selected }, '[WA] Poll vote forwarded');
+                }
+              } else {
+                logger.warn({ pollId }, '[WA] Poll vote without encryption key — cannot decrypt');
+              }
+            }
+          } catch (err) {
+            logger.warn({ err: err.message, msgId: msg.key.id }, '[WA] Could not process poll vote');
+            await askToTypeAnswer(msg.key.remoteJid);
+          }
+          continue;
+        }
+
         try {
           await webhookService.forwardIncomingMessage(msg, sock);
         } catch (err) {
@@ -428,6 +480,21 @@ async function resetSession() {
 }
 
 /**
+ * Si un voto de encuesta no se pudo leer, el cliente no recibiría respuesta alguna.
+ * Se le pide que escriba su respuesta; el borrador de la reserva sigue activo en el backend.
+ */
+async function askToTypeAnswer(jid) {
+  try {
+    if (!sock || sessionStatus !== 'CONNECTED' || !jid) return;
+    await sock.sendMessage(jid, {
+      text: 'No pude leer tu respuesta de la encuesta 😔. ¿Me la escribes por texto? Por ejemplo: "6 personas" o "sábado 24".',
+    });
+  } catch (err) {
+    logger.warn({ err: err.message }, '[WA] Could not send poll fallback message');
+  }
+}
+
+/**
  * Enviar mensaje de texto
  */
 async function sendTextMessage(to, text) {
@@ -447,6 +514,35 @@ async function sendTextMessage(to, text) {
 
   const result = await sock.sendMessage(jid, { text });
   logger.info({ to: jid, msgId: result.key.id }, '[WA] Text message sent');
+  return result;
+}
+
+/**
+ * Enviar encuesta (poll) de WhatsApp.
+ * Guarda el mensaje original para poder descifrar el voto cuando llegue.
+ */
+async function sendPollMessage(to, name, values, selectableCount = 1) {
+  if (!sock || sessionStatus !== 'CONNECTED') {
+    throw new Error('WhatsApp not connected');
+  }
+  if (!Array.isArray(values) || values.length < 2) {
+    throw new Error('A poll needs at least 2 options');
+  }
+  const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+  const result = await sock.sendMessage(jid, {
+    poll: { name, values, selectableCount: Math.max(1, Math.min(selectableCount, values.length)) },
+  });
+  sentPolls.set(result.key.id, {
+    message: result.message,
+    messageContextInfo: result.messageContextInfo,
+    options: values,
+    jid,
+    createdAt: Date.now(),
+  });
+  // Limpieza simple: polls de más de 24 h ya no se necesitan para la demo.
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [id, p] of sentPolls) if (p.createdAt < cutoff) sentPolls.delete(id);
+  logger.info({ to: jid, msgId: result.key.id, options: values.length }, '[WA] Poll sent');
   return result;
 }
 
@@ -518,6 +614,7 @@ module.exports = {
   getQR,
   getSocket,
   sendTextMessage,
+  sendPollMessage,
   sendImageMessage,
   sendDocumentMessage,
   sendLocationMessage,

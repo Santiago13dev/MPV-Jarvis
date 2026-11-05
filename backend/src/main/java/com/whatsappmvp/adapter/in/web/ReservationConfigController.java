@@ -40,7 +40,8 @@ public class ReservationConfigController {
     @PatchMapping
     public ResponseEntity<ApiResponse<Map<String, Object>>> update(@RequestBody ReservationSettingsRequest r) {
         RestaurantSettingsEntity s = settingsService.update(new SettingsUpdate(
-                r.getNormalPrice(), r.getVipPrice(), r.getVipCapacity(), r.getOperatingDays(),
+                r.getNormalPrice(), r.getCelebrationPrice(), r.getExtraHonoreePrice(), r.getVipPrice(),
+                r.getVipCapacity(), r.getOperatingDays(),
                 r.getOpenOnHolidayMondays(), r.getReservationStartTime(), r.getReservationEndTime(),
                 r.getSlotIntervalMinutes(), r.getDefaultSlotCapacity(), r.getMaxPartySize(), r.getHoldMinutes(),
                 r.getVipConsumesNormalCapacity(), r.getPaymentInstructions()));
@@ -102,6 +103,8 @@ public class ReservationConfigController {
     private Map<String, Object> toMap(RestaurantSettingsEntity s) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("normalPrice", s.getNormalPrice());
+        m.put("celebrationPrice", s.getCelebrationPrice());
+        m.put("extraHonoreePrice", s.getExtraHonoreePrice());
         m.put("vipPrice", s.getVipPrice());
         m.put("vipCapacity", s.getVipCapacity());
         m.put("operatingDays", s.operatingDaysSet().stream().sorted().map(DayOfWeek::name).toList());
