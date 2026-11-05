@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const waClient = require('../whatsapp/client');
+const waClient = require('../whatsapp/provider');
 const config = require('../config');
 
 // Middleware: validar webhook secret

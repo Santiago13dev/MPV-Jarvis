@@ -4,7 +4,7 @@
 
 const express = require('express');
 const router = express.Router();
-const waClient = require('../whatsapp/client');
+const waClient = require('../whatsapp/provider');
 
 // GET /health — health check para Docker
 router.get('/health', (req, res) => {

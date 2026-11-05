@@ -18,6 +18,45 @@ Angular (4200) → Nginx (80) → Spring Boot (8080) → PostgreSQL (5432)
 
 ---
 
+## Modo sin QR: Twilio WhatsApp (Sandbox)
+
+Alternativa a Baileys para probar el bot **sin escanear QR ni vincular un dispositivo**: el cliente
+(uno mismo) escribe desde su WhatsApp normal al número del Sandbox de Twilio y el bot responde ahí.
+No requiere otro celular ni la cámara.
+
+**Cómo funciona**
+
+- Entrante: Twilio hace `POST` form-urlencoded a `https://<url-pública>/webhook/twilio`
+  (`whatsapp-service/src/routes/twilio.routes.js`) → descarga el adjunto si es imagen/PDF → reenvía al
+  backend en `/api/webhook/message` con `remoteJid = <phone>@s.whatsapp.net`.
+- Saliente: `message.routes.js` usa `src/whatsapp/provider.js`, que elige `client.js` (Baileys) o
+  `twilio.client.js` según `WA_PROVIDER`. El backend no cambia.
+- `/session/status` responde `CONNECTED` sin QR; `/session/reset` es no-op.
+
+**Variables (`WA_PROVIDER=twilio`)**
+
+```
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+TWILIO_PUBLIC_URL=            # URL exacta del webhook (solo si se valida firma)
+TWILIO_VALIDATE_SIGNATURE=false
+```
+
+**Puesta en marcha (una vez)**
+
+1. Cuenta gratis en twilio.com → Console → Messaging → Try it out → Send a WhatsApp message (Sandbox).
+2. Desde el WhatsApp propio enviar al `+1 415 523 8886`: `join <código>`.
+3. En “When a message comes in”: `https://<url>/webhook/twilio` (POST).
+4. `bash scripts/dev-twilio.sh` levanta el servicio en `:3001` y abre un túnel `trycloudflare.com`
+   (la URL cambia en cada arranque → actualizarla en Twilio).
+
+**Límites**: cuenta trial solo envía a números que se unieron al sandbox y antepone “Sent from your
+Twilio trial account”; los adjuntos solo se aceptan como comprobante (JPEG/PNG/WebP/PDF ≤ 8 MB).
+Las encuestas (`/messages/send/poll`) y la ubicación se degradan a texto enlace.
+
+---
+
 ## Current State (What Works)
 
 ### QR Reset Flow

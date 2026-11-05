@@ -39,6 +39,12 @@ services:
       BACKEND_WEBHOOK_URL: ${BACKEND_WEBHOOK_URL:-http://backend:8080/api/webhook/message}
       WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET:-devsecret}
       SESSION_NAME: ${WA_SESSION_NAME:-default}
+      WA_PROVIDER: ${WA_PROVIDER:-baileys}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      TWILIO_PUBLIC_URL: ${TWILIO_PUBLIC_URL:-}
+      TWILIO_VALIDATE_SIGNATURE: ${TWILIO_VALIDATE_SIGNATURE:-false}
       NODE_ENV: development
     volumes:
       - wa_sessions:/app/sessions     # Persistencia de sesión WhatsApp

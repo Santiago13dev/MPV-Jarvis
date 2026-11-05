@@ -5,6 +5,19 @@ module.exports = {
   sessionName: process.env.SESSION_NAME || 'default',
   sessionsDir: process.env.SESSIONS_DIR || './sessions',
 
+  // Proveedor de WhatsApp: "baileys" (QR) o "twilio" (Cloud, sin QR)
+  provider: (process.env.WA_PROVIDER || 'baileys').toLowerCase(),
+
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID || '',
+    authToken: process.env.TWILIO_AUTH_TOKEN || '',
+    // Número de Twilio que aparece como remitente, ej: whatsapp:+14155238886
+    from: process.env.TWILIO_WHATSAPP_FROM || '',
+    // URL pública del webhook (necesaria si se valida la firma detrás de un túnel)
+    publicUrl: process.env.TWILIO_PUBLIC_URL || '',
+    validateSignature: (process.env.TWILIO_VALIDATE_SIGNATURE || 'false').toLowerCase() === 'true',
+  },
+
   // Backend Spring Boot webhook URL
   backendWebhookUrl: process.env.BACKEND_WEBHOOK_URL || 'http://localhost:8080/api/webhook/message',
   backendUrl: process.env.BACKEND_URL || 'http://localhost:8080',

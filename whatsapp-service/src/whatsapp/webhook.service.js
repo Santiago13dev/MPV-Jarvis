@@ -148,6 +148,20 @@ async function forwardIncomingMessage(msg, sock) {
   };
 
   // No loguear el adjunto (base64 enorme y dato sensible)
+  await postIncoming(payload);
+}
+
+/**
+ * Envía al backend un mensaje ya normalizado (usado por proveedores que no son Baileys).
+ */
+async function forwardExternalMessage(payload) {
+  await postIncoming(payload);
+}
+
+/**
+ * POST común: WhatsApp Service → Spring Boot
+ */
+async function postIncoming(payload) {
   const { mediaBase64, ...loggable } = payload;
   logger.debug({ payload: loggable, hasMedia: !!mediaBase64 }, '[Webhook] Forwarding incoming message to backend');
 
@@ -157,7 +171,10 @@ async function forwardIncomingMessage(msg, sock) {
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
   });
-  logger.info({ status: response.status, phone, hasMedia: !!mediaBase64 }, '[Webhook] Message forwarded successfully');
+  logger.info(
+    { status: response.status, phone: payload.phone, hasMedia: !!mediaBase64 },
+    '[Webhook] Message forwarded successfully',
+  );
 }
 
 /**
@@ -182,6 +199,7 @@ async function notifyMessageStatusUpdate(update) {
 
 module.exports = {
   forwardIncomingMessage,
+  forwardExternalMessage,
   notifyStatusChange,
   notifyMessageStatusUpdate,
 };
